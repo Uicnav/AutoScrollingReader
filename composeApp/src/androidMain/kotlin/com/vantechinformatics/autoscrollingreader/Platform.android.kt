@@ -34,10 +34,8 @@ import androidx.core.net.toUri
 import android.widget.Toast
 
 class AndroidFileImporter : FileImporter {
+    override val isManualImportSupported: Boolean = false
     override fun pickFile(onResult: (Boolean) -> Unit) {
-        // Pe Android scanarea e automată.
-        // Aici ai putea implementa și System Picker dacă vrei, dar momentan doar anunțăm.
-        Toast.makeText(appContext, "Pe Android scanarea este automată!", Toast.LENGTH_SHORT).show()
         onResult(false)
     }
 }
@@ -288,114 +286,14 @@ class AndroidReadingPositionStore(private val context: Context) : ReadingPositio
             null
         }
     }
+
+    override fun saveLastOpened(uri: String) {
+        prefs.edit().putLong("opened_$uri", System.currentTimeMillis()).apply()
+    }
+
+    override fun getLastOpened(uri: String): Long {
+        return prefs.getLong("opened_$uri", 0L)
+    }
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = AndroidReadingPositionStore(appContext)
-
-// --- PDF TEXT EXTRACTION ---
-
-class AndroidPdfTextExtractor(private val context: Context) : PdfTextExtractor {
-    private var initialized = false
-
-    override suspend fun extractTextByPage(data: Any): List<String> = withContext(Dispatchers.IO) {
-        if (!initialized) {
-            com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context)
-            initialized = true
-        }
-
-        val inputString = data.toString()
-        val inputStream = if (inputString.startsWith("content://") || inputString.startsWith("file://")) {
-            val uri = Uri.parse(inputString)
-            context.contentResolver.openInputStream(uri)
-                ?: throw Exception("Cannot open stream from URI")
-        } else {
-            try {
-                context.assets.open(inputString)
-            } catch (e: Exception) {
-                throw Exception("File not found: $inputString")
-            }
-        }
-
-        val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputStream)
-        val stripper = com.tom_roush.pdfbox.text.PDFTextStripper()
-        val pageTexts = mutableListOf<String>()
-
-        for (i in 1..document.numberOfPages) {
-            stripper.startPage = i
-            stripper.endPage = i
-            pageTexts.add(stripper.getText(document).trim())
-        }
-
-        document.close()
-        pageTexts
-    }
-}
-
-actual fun getPdfTextExtractor(): PdfTextExtractor = AndroidPdfTextExtractor(appContext)
-
-// --- TEXT TO SPEECH ---
-
-class AndroidTtsEngine(context: Context) : TextToSpeechEngine {
-    private var tts: android.speech.tts.TextToSpeech? = null
-    private var isReady = false
-    private var currentText: String? = null
-    private var currentOnDone: (() -> Unit)? = null
-    private var speaking = false
-
-    init {
-        tts = android.speech.tts.TextToSpeech(context) { status ->
-            isReady = status == android.speech.tts.TextToSpeech.SUCCESS
-        }
-        tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                speaking = true
-            }
-
-            override fun onDone(utteranceId: String?) {
-                speaking = false
-                currentOnDone?.invoke()
-            }
-
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                speaking = false
-            }
-        })
-    }
-
-    override fun speak(text: String, onDone: () -> Unit) {
-        if (!isReady || text.isBlank()) {
-            onDone()
-            return
-        }
-        currentText = text
-        currentOnDone = onDone
-        speaking = true
-        tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "tts_page")
-    }
-
-    override fun stop() {
-        speaking = false
-        currentOnDone = null
-        tts?.stop()
-    }
-
-    override fun pause() {
-        speaking = false
-        tts?.stop()
-    }
-
-    override fun resume() {
-        val text = currentText ?: return
-        speaking = true
-        tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "tts_page")
-    }
-
-    override fun setSpeechRate(rate: Float) {
-        tts?.setSpeechRate(rate)
-    }
-
-    override fun isSpeaking(): Boolean = speaking
-}
-
-actual fun getTextToSpeechEngine(): TextToSpeechEngine = AndroidTtsEngine(appContext)

@@ -39,14 +39,11 @@ import platform.UIKit.UIGraphicsGetImageFromCurrentImageContext
 import platform.UIKit.UIImage
 import platform.UIKit.UIImagePNGRepresentation
 import platform.UniformTypeIdentifiers.UTTypePDF
-import platform.AVFAudio.AVSpeechBoundary
-import platform.AVFAudio.AVSpeechSynthesizer
-import platform.AVFAudio.AVSpeechSynthesizerDelegateProtocol
-import platform.AVFAudio.AVSpeechUtterance
 import platform.darwin.NSObject
 
 // 1. Clasa principală: Implementează DOAR interfața Kotlin
 class IosFileImporter : FileImporter {
+    override val isManualImportSupported: Boolean = true
 
     // IMPORTANT: Trebuie să păstrăm o referință puternică la delegat,
     // altfel garbage collector-ul îl șterge înainte ca userul să aleagă fișierul
@@ -291,112 +288,15 @@ class IOSReadingPositionStore : ReadingPositionStore {
             null
         }
     }
+
+    @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    override fun saveLastOpened(uri: String) {
+        defaults.setDouble(platform.posix.time(null).toDouble() * 1000, forKey = "opened_$uri")
+    }
+
+    override fun getLastOpened(uri: String): Long {
+        return defaults.doubleForKey("opened_$uri").toLong()
+    }
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = IOSReadingPositionStore()
-
-// --- PDF TEXT EXTRACTION ---
-
-class IOSPdfTextExtractor : PdfTextExtractor {
-    override suspend fun extractTextByPage(data: Any): List<String> {
-        val pathString = data as String
-        val url: NSURL? = if (pathString.startsWith("file://")) {
-            NSURL.URLWithString(pathString)
-        } else {
-            val path = NSBundle.mainBundle.pathForResource(pathString.removeSuffix(".pdf"), ofType = "pdf")
-            path?.let { NSURL.fileURLWithPath(it) }
-        }
-
-        if (url == null) throw Exception("PDF URL is null for: $data")
-
-        val pdfDoc = platform.PDFKit.PDFDocument(url)
-            ?: throw Exception("Cannot create PDFDocument for: $data")
-
-        val pageTexts = mutableListOf<String>()
-        val pageCount = pdfDoc.pageCount().toInt()
-
-        for (i in 0 until pageCount) {
-            val page = pdfDoc.pageAtIndex(i.toULong())
-            pageTexts.add(page?.string() ?: "")
-        }
-
-        return pageTexts
-    }
-}
-
-actual fun getPdfTextExtractor(): PdfTextExtractor = IOSPdfTextExtractor()
-
-// --- TEXT TO SPEECH ---
-
-class IOSTtsEngine : TextToSpeechEngine {
-    private val synthesizer = AVSpeechSynthesizer()
-    private var currentText: String? = null
-    private var currentOnDone: (() -> Unit)? = null
-    private var speechRate: Float = 0.5f  // AVSpeechUtterance default rate
-    private var speaking = false
-
-    // Keep strong reference to delegate
-    private var delegate: TtsDelegate? = null
-
-    init {
-        val newDelegate = TtsDelegate(
-            onFinish = {
-                speaking = false
-                currentOnDone?.invoke()
-            }
-        )
-        delegate = newDelegate
-        synthesizer.delegate = newDelegate
-    }
-
-    override fun speak(text: String, onDone: () -> Unit) {
-        if (text.isBlank()) {
-            onDone()
-            return
-        }
-        currentText = text
-        currentOnDone = onDone
-        speaking = true
-
-        val utterance = AVSpeechUtterance.speechUtteranceWithString(text)
-        utterance.rate = speechRate
-        synthesizer.speakUtterance(utterance)
-    }
-
-    override fun stop() {
-        speaking = false
-        currentOnDone = null
-        synthesizer.stopSpeakingAtBoundary(AVSpeechBoundary.AVSpeechBoundaryImmediate)
-    }
-
-    override fun pause() {
-        speaking = false
-        synthesizer.pauseSpeakingAtBoundary(AVSpeechBoundary.AVSpeechBoundaryImmediate)
-    }
-
-    override fun resume() {
-        speaking = true
-        synthesizer.continueSpeaking()
-    }
-
-    override fun setSpeechRate(rate: Float) {
-        // AVSpeechUtterance rate: 0.0 (slowest) to 1.0 (fastest), default ~0.5
-        // Map our 0.5-2.0 input to 0.25-0.75 AVSpeech range
-        speechRate = 0.25f + (rate - 0.5f) * (0.5f / 1.5f)
-    }
-
-    override fun isSpeaking(): Boolean = speaking
-
-    private class TtsDelegate(
-        private val onFinish: () -> Unit
-    ) : NSObject(), AVSpeechSynthesizerDelegateProtocol {
-        override fun speechSynthesizer(
-            synthesizer: AVSpeechSynthesizer,
-            didFinishSpeechUtterance: AVSpeechUtterance
-        ) {
-            onFinish()
-        }
-    }
-}
-
-actual fun getTextToSpeechEngine(): TextToSpeechEngine = IOSTtsEngine()

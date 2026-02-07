@@ -4,7 +4,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 
 import androidx.compose.runtime.Composable
 interface FileImporter {
-    // Deschide fereastra de sistem și returnează true dacă s-a importat ceva
+    val isManualImportSupported: Boolean
     fun pickFile(onResult: (Boolean) -> Unit)
 }
 
@@ -45,22 +45,8 @@ expect fun getPlatform(): Platform
 interface ReadingPositionStore {
     fun savePosition(uri: String, firstVisibleIndex: Int, scrollOffset: Int)
     fun getPosition(uri: String): Pair<Int, Int>?
+    fun saveLastOpened(uri: String)
+    fun getLastOpened(uri: String): Long
 }
 
 expect fun getReadingPositionStore(): ReadingPositionStore
-
-interface PdfTextExtractor {
-    suspend fun extractTextByPage(data: Any): List<String>
-}
-
-interface TextToSpeechEngine {
-    fun speak(text: String, onDone: () -> Unit)
-    fun stop()
-    fun pause()
-    fun resume()
-    fun setSpeechRate(rate: Float)
-    fun isSpeaking(): Boolean
-}
-
-expect fun getPdfTextExtractor(): PdfTextExtractor
-expect fun getTextToSpeechEngine(): TextToSpeechEngine

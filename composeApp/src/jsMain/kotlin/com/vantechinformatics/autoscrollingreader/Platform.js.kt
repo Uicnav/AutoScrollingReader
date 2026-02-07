@@ -8,28 +8,19 @@ actual fun getPlatform(): Platform = JsPlatform()
 
 class JsReadingPositionStore : ReadingPositionStore {
     private val positions = mutableMapOf<String, Pair<Int, Int>>()
+    private val lastOpened = mutableMapOf<String, Long>()
 
     override fun savePosition(uri: String, firstVisibleIndex: Int, scrollOffset: Int) {
         positions[uri] = Pair(firstVisibleIndex, scrollOffset)
     }
 
     override fun getPosition(uri: String): Pair<Int, Int>? = positions[uri]
+
+    override fun saveLastOpened(uri: String) {
+        lastOpened[uri] = kotlin.js.Date.now().toLong()
+    }
+
+    override fun getLastOpened(uri: String): Long = lastOpened[uri] ?: 0L
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = JsReadingPositionStore()
-
-class JsPdfTextExtractor : PdfTextExtractor {
-    override suspend fun extractTextByPage(data: Any): List<String> = emptyList()
-}
-
-class JsTtsEngine : TextToSpeechEngine {
-    override fun speak(text: String, onDone: () -> Unit) { onDone() }
-    override fun stop() {}
-    override fun pause() {}
-    override fun resume() {}
-    override fun setSpeechRate(rate: Float) {}
-    override fun isSpeaking(): Boolean = false
-}
-
-actual fun getPdfTextExtractor(): PdfTextExtractor = JsPdfTextExtractor()
-actual fun getTextToSpeechEngine(): TextToSpeechEngine = JsTtsEngine()
