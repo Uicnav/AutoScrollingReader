@@ -199,67 +199,62 @@ actual fun getPdfScanner(): PdfScanner = AndroidPdfScanner(appContext)
 // --- LOADER (Render PDF) ---
 
 class AndroidPdfLoader(private val context: Context) : PdfLoader {
-    override suspend fun loadPdf(data: Any): List<ImageBitmap> = withContext(Dispatchers.IO) {
-        val inputString = data.toString()
-        val fileToRender: File
 
-        // Logica pentru fișiere externe (Uri) vs Assets
+    private fun resolveFile(data: Any): File {
+        val inputString = data.toString()
         if (inputString.startsWith("content://") || inputString.startsWith("file://")) {
             val uri = Uri.parse(inputString)
             val inputStream = context.contentResolver.openInputStream(uri)
-                ?: throw Exception("Cannot open stream form URI")
-
-            // Copiem într-un fișier temporar rapid (Cache)
-            fileToRender = File(context.cacheDir, "temp_view_${System.currentTimeMillis()}.pdf")
-            FileOutputStream(fileToRender).use { output ->
-                inputStream.copyTo(output)
-            }
+                ?: throw Exception("Cannot open stream from URI")
+            val fileToRender = File(context.cacheDir, "temp_view_${System.currentTimeMillis()}.pdf")
+            FileOutputStream(fileToRender).use { output -> inputStream.copyTo(output) }
+            return fileToRender
         } else {
-            // Caz: Fișier din Assets (sample.pdf) - dacă e folosit ca fallback
-            fileToRender = File(context.cacheDir, inputString)
+            val fileToRender = File(context.cacheDir, inputString)
             if (!fileToRender.exists()) {
                 try {
                     context.assets.open(inputString).use { input ->
-                        FileOutputStream(fileToRender).use { output ->
-                            input.copyTo(output)
-                        }
+                        FileOutputStream(fileToRender).use { output -> input.copyTo(output) }
                     }
                 } catch (e: Exception) {
                     throw Exception("File not found in assets or URI: $inputString")
                 }
             }
+            return fileToRender
         }
+    }
 
-        val fileDescriptor = ParcelFileDescriptor.open(fileToRender, ParcelFileDescriptor.MODE_READ_ONLY)
-        val pdfRenderer = PdfRenderer(fileDescriptor)
-        val bitmaps = mutableListOf<ImageBitmap>()
+    private fun renderPage(pdfRenderer: PdfRenderer, index: Int): ImageBitmap {
+        val page = pdfRenderer.openPage(index)
+        val width = page.width * 2
+        val height = page.height * 2
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.WHITE)
+        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        page.close()
+        return bitmap.asImageBitmap()
+    }
 
-        // Randăm paginile
-        for (i in 0 until pdfRenderer.pageCount) {
-            val page = pdfRenderer.openPage(i)
-
-            // Rezoluție X2 pentru claritate
-            val width = page.width * 2
-            val height = page.height * 2
-
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-
-            // Render cu fundal alb (PDF-urile sunt transparente default uneori)
-            bitmap.eraseColor(android.graphics.Color.WHITE)
-
-            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            bitmaps.add(bitmap.asImageBitmap())
-            page.close()
-        }
-
-        pdfRenderer.close()
-        fileDescriptor.close()
-        // Curățăm fișierul temporar pentru a nu umple memoria
-        if (inputString.startsWith("content://")) {
-            // fileToRender.delete() // Decomentează dacă vrei să ștergi imediat, dar atenție la re-render
-        }
-
+    override suspend fun loadPdf(data: Any): List<ImageBitmap> = withContext(Dispatchers.IO) {
+        val file = resolveFile(data)
+        val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        val renderer = PdfRenderer(fd)
+        val bitmaps = (0 until renderer.pageCount).map { renderPage(renderer, it) }
+        renderer.close()
+        fd.close()
         bitmaps
+    }
+
+    override suspend fun loadPdfProgressively(data: Any, onPageReady: (ImageBitmap) -> Unit) = withContext(Dispatchers.IO) {
+        val file = resolveFile(data)
+        val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        val renderer = PdfRenderer(fd)
+        for (i in 0 until renderer.pageCount) {
+            val bitmap = renderPage(renderer, i)
+            withContext(Dispatchers.Main) { onPageReady(bitmap) }
+        }
+        renderer.close()
+        fd.close()
     }
 }
 

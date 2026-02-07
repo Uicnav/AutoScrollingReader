@@ -32,6 +32,7 @@ expect fun getPdfScanner(): PdfScanner
 
 interface PdfLoader {
     suspend fun loadPdf(data: Any): List<ImageBitmap>
+    suspend fun loadPdfProgressively(data: Any, onPageReady: (ImageBitmap) -> Unit)
 }
 
 expect fun getPdfLoader(): PdfLoader

@@ -8,14 +8,29 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.useContents
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.withContext
+import org.jetbrains.skia.ColorAlphaType
+import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.Image
+import org.jetbrains.skia.ImageInfo
+import platform.CoreFoundation.CFDataGetBytePtr
+import platform.CoreFoundation.CFDataGetLength
 import platform.CoreFoundation.CFRelease
 import platform.CoreFoundation.CFURLRef
+import platform.CoreGraphics.CGBitmapContextCreate
+import platform.CoreGraphics.CGBitmapContextCreateImage
+import platform.CoreGraphics.CGColorSpaceCreateDeviceRGB
+import platform.CoreGraphics.CGColorSpaceRelease
 import platform.CoreGraphics.CGContextDrawPDFPage
 import platform.CoreGraphics.CGContextFillRect
 import platform.CoreGraphics.CGContextScaleCTM
 import platform.CoreGraphics.CGContextSetRGBFillColor
 import platform.CoreGraphics.CGContextTranslateCTM
+import platform.CoreGraphics.CGDataProviderCopyData
+import platform.CoreGraphics.CGImageGetDataProvider
+import platform.CoreGraphics.CGImageRelease
 import platform.CoreGraphics.CGPDFDocumentCreateWithURL
 import platform.CoreGraphics.CGPDFDocumentGetNumberOfPages
 import platform.CoreGraphics.CGPDFDocumentGetPage
@@ -250,6 +265,82 @@ class IOSPdfLoader : PdfLoader {
             }
         }
         return images
+    }
+
+    @OptIn(ExperimentalForeignApi::class)
+    override suspend fun loadPdfProgressively(data: Any, onPageReady: (ImageBitmap) -> Unit) {
+        val pathString = data as String
+        val url: NSURL? = if (pathString.startsWith("file://")) {
+            NSURL.URLWithString(pathString)
+        } else {
+            NSBundle.mainBundle.pathForResource(pathString.removeSuffix(".pdf"), ofType = "pdf")
+                ?.let { NSURL.fileURLWithPath(it) }
+        }
+        if (url == null) throw Exception("PDF URL is null for: $data")
+
+        val cfUrlPtr = CFBridgingRetain(url)
+        val cfUrlRef: CFURLRef? = cfUrlPtr?.reinterpret()
+        val document = CGPDFDocumentCreateWithURL(cfUrlRef)
+        if (cfUrlPtr != null) CFRelease(cfUrlPtr)
+        if (document == null) throw Exception("Cannot create CGPDFDocument")
+
+        val pageCount = CGPDFDocumentGetNumberOfPages(document)
+        for (i in 1..pageCount.toInt()) {
+            // Render on background thread using thread-safe CGBitmapContext
+            val bitmap = withContext(Dispatchers.IO) {
+                renderPageOffscreen(document, i)
+            }
+            if (bitmap != null) {
+                onPageReady(bitmap)
+            }
+        }
+    }
+
+    @OptIn(ExperimentalForeignApi::class)
+    private fun renderPageOffscreen(document: platform.CoreGraphics.CGPDFDocumentRef?, pageIndex: Int): ImageBitmap? {
+        val page = CGPDFDocumentGetPage(document, pageIndex.toULong()) ?: return null
+        val pageRect = CGPDFPageGetBoxRect(page, kCGPDFMediaBox)
+        val width = pageRect.useContents { size.width }
+        val height = pageRect.useContents { size.height }
+        val widthInt = width.toInt()
+        val heightInt = height.toInt()
+        if (widthInt <= 0 || heightInt <= 0) return null
+
+        val colorSpace = CGColorSpaceCreateDeviceRGB()
+        val ctx = CGBitmapContextCreate(
+            data = null,
+            width = widthInt.toULong(),
+            height = heightInt.toULong(),
+            bitsPerComponent = 8u,
+            bytesPerRow = (widthInt * 4).toULong(),
+            space = colorSpace,
+            bitmapInfo = 1u // kCGImageAlphaPremultipliedLast
+        )
+        CGColorSpaceRelease(colorSpace)
+        if (ctx == null) return null
+
+        CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0)
+        CGContextFillRect(ctx, pageRect)
+        CGContextDrawPDFPage(ctx, page)
+
+        val cgImage = CGBitmapContextCreateImage(ctx)
+        CFRelease(ctx)
+        if (cgImage == null) return null
+
+        // Read raw RGBA pixels directly — much faster than PNG encode/decode
+        val dataProvider = CGImageGetDataProvider(cgImage)
+        val cfData = if (dataProvider != null) CGDataProviderCopyData(dataProvider) else null
+        CGImageRelease(cgImage)
+        if (cfData == null) return null
+
+        val ptr = CFDataGetBytePtr(cfData)
+        val len = CFDataGetLength(cfData).toInt()
+        val pixelBytes = ptr?.reinterpret<ByteVar>()?.readBytes(len)
+        CFRelease(cfData)
+        if (pixelBytes == null) return null
+
+        val imageInfo = ImageInfo(widthInt, heightInt, ColorType.RGBA_8888, ColorAlphaType.PREMUL)
+        return Image.makeRaster(imageInfo, pixelBytes, widthInt * 4).toComposeImageBitmap()
     }
 
     @OptIn(ExperimentalForeignApi::class)

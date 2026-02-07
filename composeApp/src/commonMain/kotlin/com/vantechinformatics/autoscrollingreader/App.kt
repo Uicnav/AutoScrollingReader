@@ -465,11 +465,14 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         }
     }
 
-    // Load PDF
+    // Load PDF progressively — pages appear as they're rendered
     LaunchedEffect(uri) {
         isLoading = true
         try {
-            pages = pdfLoader.loadPdf(uri)
+            pdfLoader.loadPdfProgressively(uri) { bitmap ->
+                pages = pages + bitmap
+                if (isLoading) isLoading = false
+            }
         } catch (e: Exception) {
             errorMessage = "Cannot open file: ${e.message}"
             e.printStackTrace()

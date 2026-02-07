@@ -27,6 +27,10 @@ class DesktopPdfLoader : PdfLoader {
         document.close()
         return images
     }
+
+    override suspend fun loadPdfProgressively(data: Any, onPageReady: (ImageBitmap) -> Unit) {
+        loadPdf(data).forEach { onPageReady(it) }
+    }
 }
 
 actual fun getPdfLoader(): PdfLoader = DesktopPdfLoader()
