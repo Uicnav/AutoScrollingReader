@@ -267,3 +267,26 @@ class IOSPdfLoader : PdfLoader {
 }
 
 actual fun getPdfLoader(): PdfLoader = IOSPdfLoader()
+
+// --- READING POSITION STORE ---
+
+class IOSReadingPositionStore : ReadingPositionStore {
+    private val defaults = platform.Foundation.NSUserDefaults.standardUserDefaults
+
+    override fun savePosition(uri: String, firstVisibleIndex: Int, scrollOffset: Int) {
+        defaults.setObject("$firstVisibleIndex,$scrollOffset", forKey = "pos_$uri")
+    }
+
+    override fun getPosition(uri: String): Pair<Int, Int>? {
+        val value = defaults.stringForKey("pos_$uri") ?: return null
+        val parts = value.split(",")
+        if (parts.size != 2) return null
+        return try {
+            Pair(parts[0].toInt(), parts[1].toInt())
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
+actual fun getReadingPositionStore(): ReadingPositionStore = IOSReadingPositionStore()

@@ -41,3 +41,10 @@ interface Platform {
 }
 
 expect fun getPlatform(): Platform
+
+interface ReadingPositionStore {
+    fun savePosition(uri: String, firstVisibleIndex: Int, scrollOffset: Int)
+    fun getPosition(uri: String): Pair<Int, Int>?
+}
+
+expect fun getReadingPositionStore(): ReadingPositionStore

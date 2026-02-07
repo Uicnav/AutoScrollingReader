@@ -1,14 +1,23 @@
 package com.vantechinformatics.autoscrollingreader
 // Asigură-te că pui pachetul corect dacă e cazul, ex: package com.vantechinformatics.autoscrollingreader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,11 +26,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 @Composable
 fun App(externalData: Any? = null) {
@@ -154,16 +168,64 @@ fun LibraryScreen(onPdfSelected: (String) -> Unit) {
 @Composable
 fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
     val pdfLoader = remember { getPdfLoader() }
+    val positionStore = remember { getReadingPositionStore() }
     var pages by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
-    // Control Scroll
+    // Scroll control state
     var isScrolling by remember { mutableStateOf(false) }
-    var scrollSpeed by remember { mutableFloatStateOf(1f) }
+    var scrollSpeed by remember { mutableFloatStateOf(2f) }
+    var areControlsVisible by remember { mutableStateOf(true) }
+    var showToggleIcon by remember { mutableStateOf(false) }
+    var showEndMessage by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var positionRestored by remember { mutableStateOf(false) }
 
-    // Încărcare
+    // Track whether auto-scroll initiated the current scroll
+    var autoScrollActive by remember { mutableStateOf(false) }
+
+    // Controls auto-hide timer
+    var hideJob by remember { mutableStateOf<Job?>(null) }
+
+    // Effective scroll speed — eased from 0 to target and back
+    val effectiveSpeed = remember { mutableFloatStateOf(0f) }
+
+    // Smooth easing for scroll speed (drives the animation)
+    val targetSpeed = if (isScrolling) scrollSpeed else 0f
+    val animatedSpeed by animateFloatAsState(
+        targetValue = targetSpeed,
+        animationSpec = tween(durationMillis = 500),
+        label = "scrollSpeed"
+    )
+
+    // Sync effective speed after each recomposition
+    SideEffect {
+        effectiveSpeed.floatValue = animatedSpeed
+    }
+
+    // Helper: start auto-hide timer for controls
+    fun startHideTimer() {
+        hideJob?.cancel()
+        hideJob = coroutineScope.launch {
+            delay(3000)
+            areControlsVisible = false
+        }
+    }
+
+    // Helper: save current reading position
+    fun saveCurrentPosition() {
+        if (pages.isNotEmpty()) {
+            positionStore.savePosition(
+                uri,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        }
+    }
+
+    // Load PDF
     LaunchedEffect(uri) {
         isLoading = true
         try {
@@ -176,13 +238,90 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         }
     }
 
-    // Buclă Scroll
-    LaunchedEffect(isScrolling, scrollSpeed) {
-        if (isScrolling && pages.isNotEmpty()) {
-            while (isActive) {
-                listState.scrollBy(scrollSpeed)
-                delay(100) // ~60 FPS
+    // Restore reading position after pages load
+    LaunchedEffect(pages) {
+        if (pages.isNotEmpty() && !positionRestored) {
+            val saved = positionStore.getPosition(uri)
+            if (saved != null) {
+                val (index, offset) = saved
+                if (index < pages.size) {
+                    listState.scrollToItem(index, offset)
+                }
             }
+            positionRestored = true
+        }
+    }
+
+    // Smooth scroll loop (~60fps) — runs when scrolling is active,
+    // reads effectiveSpeed each frame for smooth easing
+    LaunchedEffect(isScrolling) {
+        if (isScrolling && pages.isNotEmpty()) {
+            autoScrollActive = true
+            while (isActive) {
+                val speed = effectiveSpeed.floatValue
+                if (speed > 0.01f) {
+                    listState.scrollBy(speed * 0.3f)
+                }
+                delay(16)
+            }
+            autoScrollActive = false
+        }
+    }
+
+    // Detect manual scroll → pause auto-scroll
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { inProgress ->
+                if (inProgress && isScrolling && !autoScrollActive) {
+                    isScrolling = false
+                    areControlsVisible = true
+                    saveCurrentPosition()
+                }
+            }
+    }
+
+    // End-of-document detection
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+            lastVisible != null && lastVisible.index == layoutInfo.totalItemsCount - 1 &&
+                lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset
+        }.collect { atEnd ->
+            if (atEnd && isScrolling) {
+                isScrolling = false
+                showEndMessage = true
+                areControlsVisible = true
+                saveCurrentPosition()
+                delay(3000)
+                showEndMessage = false
+            }
+        }
+    }
+
+    // Auto-hide controls when scrolling starts
+    LaunchedEffect(isScrolling) {
+        if (isScrolling) {
+            startHideTimer()
+        } else {
+            hideJob?.cancel()
+            areControlsVisible = true
+            saveCurrentPosition()
+        }
+    }
+
+    // Save position on exit
+    DisposableEffect(uri) {
+        onDispose {
+            saveCurrentPosition()
+        }
+    }
+
+    // Toggle icon auto-dismiss
+    LaunchedEffect(showToggleIcon) {
+        if (showToggleIcon) {
+            delay(800)
+            showToggleIcon = false
         }
     }
 
@@ -202,74 +341,201 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         } else if (isLoading) {
             CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
         } else {
-            // Lista cu pagini
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 140.dp, top = 60.dp)
+            // PDF content with tap-to-toggle
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                // Single tap: toggle auto-scroll
+                                isScrolling = !isScrolling
+                                showToggleIcon = true
+                            },
+                            onDoubleTap = {
+                                // Double tap: toggle controls without affecting scroll
+                                areControlsVisible = !areControlsVisible
+                                if (areControlsVisible && isScrolling) {
+                                    startHideTimer()
+                                }
+                            }
+                        )
+                    }
             ) {
-                items(pages) { pageBitmap ->
-                    Image(
-                        contentScale = ContentScale.Crop,
-                        bitmap = pageBitmap,
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 140.dp, top = 60.dp)
+                ) {
+                    items(pages) { pageBitmap ->
+                        Image(
+                            contentScale = ContentScale.Crop,
+                            bitmap = pageBitmap,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            // --- Play/Pause toggle icon overlay ---
+            AnimatedVisibility(
+                visible = showToggleIcon,
+                enter = fadeIn(animationSpec = tween(150)),
+                exit = fadeOut(animationSpec = tween(300)),
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), shape = CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isScrolling) Icons.Default.PlayArrow else Icons.Default.Pause,
                         contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
+                        tint = Color.White,
+                        modifier = Modifier.size(48.dp)
                     )
                 }
             }
+
+            // --- End of document message ---
+            AnimatedVisibility(
+                visible = showEndMessage,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Text(
+                    "Sfârșitul documentului",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.6f), shape = MaterialTheme.shapes.medium)
+                        .padding(horizontal = 24.dp, vertical = 12.dp)
+                )
+            }
         }
 
-        // --- Controale Suprapuse ---
-
-        // Buton Back
+        // --- Back button (always visible) ---
         IconButton(
-            onClick = onClose,
+            onClick = {
+                saveCurrentPosition()
+                onClose()
+            },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(16.dp)
                 .background(Color.Black.copy(alpha = 0.5f), shape = MaterialTheme.shapes.small)
         ) {
+            @Suppress("DEPRECATION")
             Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
         }
 
-        // Bara de Control (Viteză & Play)
+        // --- Auto-hiding control bar ---
         if (!isLoading && errorMessage == null) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
-                    .padding(16.dp)
+            AnimatedVisibility(
+                visible = areControlsVisible,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+                        .padding(16.dp)
+                        .pointerInput(Unit) {
+                            // Any touch on controls resets the hide timer
+                            detectTapGestures {
+                                if (isScrolling) {
+                                    startHideTimer()
+                                }
+                            }
+                        }
                 ) {
-                    Button(onClick = { isScrolling = !isScrolling }) {
-                        Icon(
-                            imageVector = if (isScrolling) Icons.Default.Close else Icons.Default.PlayArrow,
-                            contentDescription = null
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // Play/Pause button (48dp touch target)
+                        IconButton(
+                            onClick = {
+                                isScrolling = !isScrolling
+                                showToggleIcon = true
+                            },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isScrolling) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isScrolling) "Pause" else "Play",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        // Speed label (tappable to reset to default)
+                        Text(
+                            text = "${(scrollSpeed * 10).toInt() / 10f}x",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .clickable {
+                                    scrollSpeed = 2f
+                                    if (isScrolling) startHideTimer()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (isScrolling) "Stop" else "Start")
                     }
 
-                    Text(
-                        "Viteză: ${scrollSpeed.toInt()}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Spacer(Modifier.height(4.dp))
+
+                    // Speed slider
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "Slow",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                        Slider(
+                            value = scrollSpeed,
+                            onValueChange = {
+                                scrollSpeed = it
+                                if (isScrolling) startHideTimer()
+                            },
+                            valueRange = 0.5f..15f,
+                            steps = 28, // (15 - 0.5) / 0.5 - 1 = 28 steps for 0.5 increments
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                        )
+                        Text(
+                            "Fast",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
                 }
+            }
 
-                Spacer(Modifier.height(8.dp))
-
-                Slider(
-                    value = scrollSpeed,
-                    onValueChange = { scrollSpeed = it },
-                    valueRange = 1f..10f
+            // Bottom edge tap zone (reveals controls when hidden)
+            if (!areControlsVisible) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                areControlsVisible = true
+                                if (isScrolling) startHideTimer()
+                            }
+                        }
                 )
             }
         }

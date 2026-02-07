@@ -268,3 +268,26 @@ class AndroidPdfLoader(private val context: Context) : PdfLoader {
 actual fun getPdfLoader(): PdfLoader {
     return AndroidPdfLoader(appContext)
 }
+
+// --- READING POSITION STORE ---
+
+class AndroidReadingPositionStore(private val context: Context) : ReadingPositionStore {
+    private val prefs = context.getSharedPreferences("reading_positions", Context.MODE_PRIVATE)
+
+    override fun savePosition(uri: String, firstVisibleIndex: Int, scrollOffset: Int) {
+        prefs.edit().putString("pos_$uri", "$firstVisibleIndex,$scrollOffset").apply()
+    }
+
+    override fun getPosition(uri: String): Pair<Int, Int>? {
+        val value = prefs.getString("pos_$uri", null) ?: return null
+        val parts = value.split(",")
+        if (parts.size != 2) return null
+        return try {
+            Pair(parts[0].toInt(), parts[1].toInt())
+        } catch (e: NumberFormatException) {
+            null
+        }
+    }
+}
+
+actual fun getReadingPositionStore(): ReadingPositionStore = AndroidReadingPositionStore(appContext)
