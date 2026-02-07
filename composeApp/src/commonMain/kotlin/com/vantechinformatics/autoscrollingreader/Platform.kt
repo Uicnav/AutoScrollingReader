@@ -48,6 +48,8 @@ interface ReadingPositionStore {
     fun getPosition(uri: String): Pair<Int, Int>?
     fun saveLastOpened(uri: String)
     fun getLastOpened(uri: String): Long
+    fun saveScrollSpeed(uri: String, speed: Float)
+    fun getScrollSpeed(uri: String): Float?
 }
 
 expect fun getReadingPositionStore(): ReadingPositionStore

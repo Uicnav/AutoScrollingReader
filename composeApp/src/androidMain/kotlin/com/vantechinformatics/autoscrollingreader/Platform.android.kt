@@ -289,6 +289,14 @@ class AndroidReadingPositionStore(private val context: Context) : ReadingPositio
     override fun getLastOpened(uri: String): Long {
         return prefs.getLong("opened_$uri", 0L)
     }
+
+    override fun saveScrollSpeed(uri: String, speed: Float) {
+        prefs.edit().putFloat("speed_$uri", speed).apply()
+    }
+
+    override fun getScrollSpeed(uri: String): Float? {
+        return if (prefs.contains("speed_$uri")) prefs.getFloat("speed_$uri", 2f) else null
+    }
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = AndroidReadingPositionStore(appContext)

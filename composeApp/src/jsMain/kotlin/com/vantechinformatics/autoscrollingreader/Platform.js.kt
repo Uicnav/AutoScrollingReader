@@ -21,6 +21,10 @@ class JsReadingPositionStore : ReadingPositionStore {
     }
 
     override fun getLastOpened(uri: String): Long = lastOpened[uri] ?: 0L
+
+    private val speeds = mutableMapOf<String, Float>()
+    override fun saveScrollSpeed(uri: String, speed: Float) { speeds[uri] = speed }
+    override fun getScrollSpeed(uri: String): Float? = speeds[uri]
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = JsReadingPositionStore()

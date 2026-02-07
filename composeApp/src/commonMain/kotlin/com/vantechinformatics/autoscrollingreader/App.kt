@@ -431,7 +431,8 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
     val coroutineScope = rememberCoroutineScope()
 
     var isScrolling by remember { mutableStateOf(false) }
-    var scrollSpeed by remember { mutableFloatStateOf(2f) }
+    val savedSpeed = remember { positionStore.getScrollSpeed(uri) }
+    var scrollSpeed by remember { mutableFloatStateOf(savedSpeed ?: 2f) }
     var areControlsVisible by remember { mutableStateOf(true) }
     var showToggleIcon by remember { mutableStateOf(false) }
     var showEndMessage by remember { mutableStateOf(false) }
@@ -481,7 +482,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         }
     }
 
-    // Restore reading position
+    // Restore reading position, then auto-start scrolling
     LaunchedEffect(pages) {
         if (pages.isNotEmpty() && !positionRestored) {
             val saved = positionStore.getPosition(uri)
@@ -490,6 +491,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                 if (index < pages.size) listState.scrollToItem(index, offset)
             }
             positionRestored = true
+            isScrolling = true
         }
     }
 
@@ -781,6 +783,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                                     .border(1.dp, NeonCyan.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
                                     .clickable {
                                         scrollSpeed = 2f
+                                        positionStore.saveScrollSpeed(uri, 2f)
                                         if (isScrolling) startHideTimer()
                                     }
                                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -805,6 +808,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                                 value = scrollSpeed,
                                 onValueChange = {
                                     scrollSpeed = it
+                                    positionStore.saveScrollSpeed(uri, it)
                                     if (isScrolling) startHideTimer()
                                 },
                                 valueRange = 0.5f..15f,

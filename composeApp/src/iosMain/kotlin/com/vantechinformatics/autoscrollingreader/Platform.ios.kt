@@ -388,6 +388,14 @@ class IOSReadingPositionStore : ReadingPositionStore {
     override fun getLastOpened(uri: String): Long {
         return defaults.doubleForKey("opened_$uri").toLong()
     }
+
+    override fun saveScrollSpeed(uri: String, speed: Float) {
+        defaults.setFloat(speed, forKey = "speed_$uri")
+    }
+
+    override fun getScrollSpeed(uri: String): Float? {
+        return if (defaults.objectForKey("speed_$uri") != null) defaults.floatForKey("speed_$uri") else null
+    }
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = IOSReadingPositionStore()
