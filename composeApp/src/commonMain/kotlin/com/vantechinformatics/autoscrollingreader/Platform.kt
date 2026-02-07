@@ -48,3 +48,19 @@ interface ReadingPositionStore {
 }
 
 expect fun getReadingPositionStore(): ReadingPositionStore
+
+interface PdfTextExtractor {
+    suspend fun extractTextByPage(data: Any): List<String>
+}
+
+interface TextToSpeechEngine {
+    fun speak(text: String, onDone: () -> Unit)
+    fun stop()
+    fun pause()
+    fun resume()
+    fun setSpeechRate(rate: Float)
+    fun isSpeaking(): Boolean
+}
+
+expect fun getPdfTextExtractor(): PdfTextExtractor
+expect fun getTextToSpeechEngine(): TextToSpeechEngine

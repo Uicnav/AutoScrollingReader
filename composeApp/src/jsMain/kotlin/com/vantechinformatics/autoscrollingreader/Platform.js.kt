@@ -17,3 +17,19 @@ class JsReadingPositionStore : ReadingPositionStore {
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = JsReadingPositionStore()
+
+class JsPdfTextExtractor : PdfTextExtractor {
+    override suspend fun extractTextByPage(data: Any): List<String> = emptyList()
+}
+
+class JsTtsEngine : TextToSpeechEngine {
+    override fun speak(text: String, onDone: () -> Unit) { onDone() }
+    override fun stop() {}
+    override fun pause() {}
+    override fun resume() {}
+    override fun setSpeechRate(rate: Float) {}
+    override fun isSpeaking(): Boolean = false
+}
+
+actual fun getPdfTextExtractor(): PdfTextExtractor = JsPdfTextExtractor()
+actual fun getTextToSpeechEngine(): TextToSpeechEngine = JsTtsEngine()

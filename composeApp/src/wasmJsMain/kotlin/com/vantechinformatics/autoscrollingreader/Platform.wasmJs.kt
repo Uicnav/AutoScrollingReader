@@ -17,3 +17,19 @@ class WasmReadingPositionStore : ReadingPositionStore {
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = WasmReadingPositionStore()
+
+class WasmPdfTextExtractor : PdfTextExtractor {
+    override suspend fun extractTextByPage(data: Any): List<String> = emptyList()
+}
+
+class WasmTtsEngine : TextToSpeechEngine {
+    override fun speak(text: String, onDone: () -> Unit) { onDone() }
+    override fun stop() {}
+    override fun pause() {}
+    override fun resume() {}
+    override fun setSpeechRate(rate: Float) {}
+    override fun isSpeaking(): Boolean = false
+}
+
+actual fun getPdfTextExtractor(): PdfTextExtractor = WasmPdfTextExtractor()
+actual fun getTextToSpeechEngine(): TextToSpeechEngine = WasmTtsEngine()

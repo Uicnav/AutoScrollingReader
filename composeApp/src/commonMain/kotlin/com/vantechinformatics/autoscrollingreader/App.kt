@@ -169,6 +169,8 @@ fun LibraryScreen(onPdfSelected: (String) -> Unit) {
 fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
     val pdfLoader = remember { getPdfLoader() }
     val positionStore = remember { getReadingPositionStore() }
+    val textExtractor = remember { getPdfTextExtractor() }
+    val ttsEngine = remember { getTextToSpeechEngine() }
     var pages by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -182,6 +184,13 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var positionRestored by remember { mutableStateOf(false) }
+
+    // TTS state
+    var ttsActive by remember { mutableStateOf(false) }
+    var pageTexts by remember { mutableStateOf<List<String>>(emptyList()) }
+    var currentTtsPage by remember { mutableIntStateOf(0) }
+    var speechRate by remember { mutableFloatStateOf(1.0f) }
+    var isExtractingText by remember { mutableStateOf(false) }
 
     // Track whether auto-scroll initiated the current scroll
     var autoScrollActive by remember { mutableStateOf(false) }
@@ -222,6 +231,69 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset
             )
+        }
+    }
+
+    // Helper: speak current TTS page and advance when done
+    fun speakCurrentPage() {
+        if (!ttsActive || pageTexts.isEmpty()) return
+        if (currentTtsPage >= pageTexts.size) {
+            ttsActive = false
+            return
+        }
+        val text = pageTexts[currentTtsPage]
+        if (text.isBlank()) {
+            // Skip blank pages
+            currentTtsPage++
+            if (currentTtsPage < pageTexts.size) {
+                coroutineScope.launch {
+                    listState.animateScrollToItem(currentTtsPage)
+                    speakCurrentPage()
+                }
+            } else {
+                ttsActive = false
+            }
+            return
+        }
+        ttsEngine.speak(text) {
+            // onDone: advance to next page
+            if (ttsActive && currentTtsPage < pageTexts.size - 1) {
+                currentTtsPage++
+                coroutineScope.launch {
+                    listState.animateScrollToItem(currentTtsPage)
+                    speakCurrentPage()
+                }
+            } else {
+                ttsActive = false
+                coroutineScope.launch {
+                    showEndMessage = true
+                    areControlsVisible = true
+                    delay(3000)
+                    showEndMessage = false
+                }
+            }
+        }
+    }
+
+    // TTS activation: extract text and start speaking
+    LaunchedEffect(ttsActive) {
+        if (ttsActive) {
+            // Stop manual auto-scroll when TTS activates
+            isScrolling = false
+            if (pageTexts.isEmpty()) {
+                isExtractingText = true
+                try {
+                    pageTexts = textExtractor.extractTextByPage(uri)
+                } catch (e: Exception) {
+                    println("Text extraction failed: ${e.message}")
+                    pageTexts = List(pages.size) { "" }
+                }
+                isExtractingText = false
+            }
+            currentTtsPage = listState.firstVisibleItemIndex
+            speakCurrentPage()
+        } else {
+            ttsEngine.stop()
         }
     }
 
@@ -310,10 +382,11 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         }
     }
 
-    // Save position on exit
+    // Save position and stop TTS on exit
     DisposableEffect(uri) {
         onDispose {
             saveCurrentPosition()
+            ttsEngine.stop()
         }
     }
 
@@ -338,8 +411,17 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                     Text("Înapoi")
                 }
             }
-        } else if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+        } else if (isLoading || isExtractingText) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator()
+                if (isExtractingText) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Extracting text...", color = Color.White, fontSize = 14.sp)
+                }
+            }
         } else {
             // PDF content with tap-to-toggle
             Box(
@@ -348,8 +430,17 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = {
-                                // Single tap: toggle auto-scroll
-                                isScrolling = !isScrolling
+                                if (ttsActive) {
+                                    // Pause/resume TTS
+                                    if (ttsEngine.isSpeaking()) {
+                                        ttsEngine.pause()
+                                    } else {
+                                        ttsEngine.resume()
+                                    }
+                                } else {
+                                    // Toggle auto-scroll
+                                    isScrolling = !isScrolling
+                                }
                                 showToggleIcon = true
                             },
                             onDoubleTap = {
@@ -424,6 +515,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         // --- Back button (always visible) ---
         IconButton(
             onClick = {
+                ttsEngine.stop()
                 saveCurrentPosition()
                 onClose()
             },
@@ -466,26 +558,62 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                         // Play/Pause button (48dp touch target)
                         IconButton(
                             onClick = {
-                                isScrolling = !isScrolling
+                                if (ttsActive) {
+                                    if (ttsEngine.isSpeaking()) {
+                                        ttsEngine.pause()
+                                    } else {
+                                        ttsEngine.resume()
+                                    }
+                                } else {
+                                    isScrolling = !isScrolling
+                                }
                                 showToggleIcon = true
                             },
                             modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
-                                imageVector = if (isScrolling) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isScrolling) "Pause" else "Play",
+                                imageVector = if (ttsActive) {
+                                    if (ttsEngine.isSpeaking()) Icons.Default.Pause else Icons.Default.PlayArrow
+                                } else {
+                                    if (isScrolling) Icons.Default.Pause else Icons.Default.PlayArrow
+                                },
+                                contentDescription = "Play/Pause",
                                 modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        // TTS button
+                        IconButton(
+                            onClick = {
+                                ttsActive = !ttsActive
+                            },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (ttsActive) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                                contentDescription = "Text to Speech",
+                                tint = if (ttsActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(28.dp)
                             )
                         }
 
                         // Speed label (tappable to reset to default)
                         Text(
-                            text = "${(scrollSpeed * 10).toInt() / 10f}x",
+                            text = if (ttsActive) {
+                                "${(speechRate * 10).toInt() / 10f}x"
+                            } else {
+                                "${(scrollSpeed * 10).toInt() / 10f}x"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier
                                 .clickable {
-                                    scrollSpeed = 2f
+                                    if (ttsActive) {
+                                        speechRate = 1.0f
+                                        ttsEngine.setSpeechRate(1.0f)
+                                    } else {
+                                        scrollSpeed = 2f
+                                    }
                                     if (isScrolling) startHideTimer()
                                 }
                                 .padding(horizontal = 12.dp, vertical = 4.dp)
@@ -494,7 +622,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
 
                     Spacer(Modifier.height(4.dp))
 
-                    // Speed slider
+                    // Speed slider (switches mode based on TTS)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
@@ -504,16 +632,30 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
-                        Slider(
-                            value = scrollSpeed,
-                            onValueChange = {
-                                scrollSpeed = it
-                                if (isScrolling) startHideTimer()
-                            },
-                            valueRange = 0.5f..15f,
-                            steps = 28, // (15 - 0.5) / 0.5 - 1 = 28 steps for 0.5 increments
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                        )
+                        if (ttsActive) {
+                            Slider(
+                                value = speechRate,
+                                onValueChange = {
+                                    speechRate = it
+                                    ttsEngine.setSpeechRate(it)
+                                    if (isScrolling) startHideTimer()
+                                },
+                                valueRange = 0.5f..2.0f,
+                                steps = 14, // 0.1 increments
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            )
+                        } else {
+                            Slider(
+                                value = scrollSpeed,
+                                onValueChange = {
+                                    scrollSpeed = it
+                                    if (isScrolling) startHideTimer()
+                                },
+                                valueRange = 0.5f..15f,
+                                steps = 28,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            )
+                        }
                         Text(
                             "Fast",
                             style = MaterialTheme.typography.labelSmall,
