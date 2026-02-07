@@ -301,6 +301,7 @@ fun LibraryScreen(onPdfSelected: (String) -> Unit) {
     val positionStore = remember { getReadingPositionStore() }
     var pdfList by remember { mutableStateOf<List<PdfDocument>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var searchQuery by remember { mutableStateOf("") }
 
     LaunchedEffect(isLoading) {
         if (isLoading) {
@@ -314,23 +315,74 @@ fun LibraryScreen(onPdfSelected: (String) -> Unit) {
         }
     }
 
+    val filteredList = remember(pdfList, searchQuery) {
+        if (searchQuery.isBlank()) pdfList
+        else pdfList.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(AmbientGradient)) {
         Column(modifier = Modifier.fillMaxSize()) {
             FuturisticTopBar("PDF Library")
 
+            // Search bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkSurface.copy(alpha = 0.6f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                TextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = {
+                        Text("Search PDFs...", color = TextDim, style = MaterialTheme.typography.bodyMedium)
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(20.dp))
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = TextSecondary, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        cursorColor = NeonCyan,
+                        focusedContainerColor = DarkSurfaceAlt,
+                        unfocusedContainerColor = DarkSurfaceAlt,
+                        focusedIndicatorColor = NeonCyan,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             Box(modifier = Modifier.fillMaxSize().weight(1f)) {
                 if (isLoading) {
                     FuturisticLoadingIndicator()
-                } else if (pdfList.isEmpty()) {
+                } else if (filteredList.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        FuturisticEmptyState()
+                        if (searchQuery.isNotEmpty()) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.SearchOff, contentDescription = null, tint = TextDim, modifier = Modifier.size(48.dp))
+                                Spacer(Modifier.height(12.dp))
+                                Text("No results for \"$searchQuery\"", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                            }
+                        } else {
+                            FuturisticEmptyState()
+                        }
                     }
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(top = 12.dp, bottom = 88.dp)
                     ) {
-                        itemsIndexed(pdfList) { _, pdf ->
+                        itemsIndexed(filteredList) { _, pdf ->
                             FuturisticPdfCard(pdf = pdf, onClick = {
                                 positionStore.saveLastOpened(pdf.uri)
                                 onPdfSelected(pdf.uri)
