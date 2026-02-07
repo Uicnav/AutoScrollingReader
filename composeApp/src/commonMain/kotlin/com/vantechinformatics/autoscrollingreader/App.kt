@@ -341,24 +341,29 @@ fun LibraryScreen(onPdfSelected: (String) -> Unit) {
             }
         }
 
-        // FAB — only on platforms that support manual import (not Android)
-        if (importer.isManualImportSupported) {
-            FloatingActionButton(
-                onClick = {
+        // FAB — scan storage on Android, import files on iOS
+        FloatingActionButton(
+            onClick = {
+                if (importer.isManualImportSupported) {
                     importer.pickFile { success ->
                         if (success) isLoading = true
                     }
-                },
-                containerColor = NeonCyan,
-                contentColor = DeepVoid,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(24.dp)
-                    .navigationBarsPadding()
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Import")
-            }
+                } else {
+                    isLoading = true
+                }
+            },
+            containerColor = NeonCyan,
+            contentColor = DeepVoid,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(24.dp)
+                .navigationBarsPadding()
+        ) {
+            Icon(
+                if (importer.isManualImportSupported) Icons.Default.Add else Icons.Default.DocumentScanner,
+                contentDescription = if (importer.isManualImportSupported) "Import" else "Scan"
+            )
         }
     }
 }
