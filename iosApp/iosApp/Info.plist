@@ -10,6 +10,10 @@
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleDisplayName</key>
+    <string>ScrollRead PDF</string>
+    <key>CFBundleName</key>
+    <string>ScrollRead PDF</string>
     <key>CADisableMinimumFrameDurationOnPhone</key>
     <true/>
 
