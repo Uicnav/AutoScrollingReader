@@ -854,6 +854,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                                     annotationStore.saveAnnotations(uri, updated)
                                 }
                                 selectionMode = false
+                                selectionPageIndex = -1
                                 selectionStartIdx = -1
                                 selectionEndIdx = -1
                             }) {
@@ -864,6 +865,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                             Box(Modifier.width(1.dp).height(24.dp).background(TextDim))
                             TextButton(onClick = {
                                 selectionMode = false
+                                selectionPageIndex = -1
                                 selectionStartIdx = -1
                                 selectionEndIdx = -1
                             }) {
@@ -1250,7 +1252,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                                             )
                                         }
                                         IconButton(onClick = {
-                                            val updated = annotations.copy(highlights = annotations.highlights.filter { it !== highlight })
+                                            val updated = annotations.copy(highlights = annotations.highlights.filter { it != highlight })
                                             annotations = updated
                                             annotationStore.saveAnnotations(uri, updated)
                                         }) {

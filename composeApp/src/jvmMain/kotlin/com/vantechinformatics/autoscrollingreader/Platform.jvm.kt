@@ -81,9 +81,9 @@ actual fun getAnnotationStore(): AnnotationStore = JvmAnnotationStore()
 class JvmPdfTextExtractor : PdfTextExtractor {
     override suspend fun extractWords(data: Any, pageIndex: Int): List<PositionedWord> {
         val filePath = data as String
-        val stream = Thread.currentThread().contextClassLoader.getResourceAsStream(filePath)
-            ?: java.io.File(filePath).inputStream()
-        val document = Loader.loadPDF(stream.readAllBytes())
+        val bytes = (Thread.currentThread().contextClassLoader.getResourceAsStream(filePath)
+            ?: java.io.File(filePath).inputStream()).use { it.readAllBytes() }
+        val document = Loader.loadPDF(bytes)
         val words = mutableListOf<PositionedWord>()
 
         try {

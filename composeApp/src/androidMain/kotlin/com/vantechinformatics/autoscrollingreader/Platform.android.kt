@@ -369,7 +369,7 @@ class AndroidPdfTextExtractor(private val context: Context) : PdfTextExtractor {
             context.assets.open(inputString)
         }
 
-        val document = PDDocument.load(inputStream)
+        val document = inputStream.use { PDDocument.load(it) }
         try {
             val page = document.getPage(pageIndex)
             val pageWidth = page.mediaBox.width
