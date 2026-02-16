@@ -43,6 +43,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -274,7 +282,7 @@ fun App(externalData: Any? = null) {
 
 @Composable
 fun MainContent(externalData: Any?) {
-    var currentFileUri by remember { mutableStateOf(externalData as? String) }
+    var currentFileUri by rememberSaveable { mutableStateOf(externalData as? String) }
 
     LaunchedEffect(externalData) {
         if (externalData != null) {
@@ -442,6 +450,27 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
     var autoScrollActive by remember { mutableStateOf(false) }
     var hideJob by remember { mutableStateOf<Job?>(null) }
 
+    // Annotation state
+    val annotationStore = remember { getAnnotationStore() }
+    var annotations by remember { mutableStateOf(annotationStore.getAnnotations(uri)) }
+    val currentPageIndex by remember {
+        derivedStateOf { listState.firstVisibleItemIndex }
+    }
+    val isCurrentPageBookmarked by remember {
+        derivedStateOf { annotations.bookmarks.any { it.pageIndex == currentPageIndex } }
+    }
+
+    // Selection state
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectionPageIndex by remember { mutableIntStateOf(-1) }
+    var selectionStartIdx by remember { mutableIntStateOf(-1) }
+    var selectionEndIdx by remember { mutableIntStateOf(-1) }
+    var cachedWords by remember { mutableStateOf<Map<Int, List<PositionedWord>>>(emptyMap()) }
+    val textExtractor = remember { getPdfTextExtractor() }
+
+    // Annotations panel
+    var showAnnotationsPanel by remember { mutableStateOf(false) }
+
     val effectiveSpeed = remember { mutableFloatStateOf(0f) }
     val targetSpeed = if (isScrolling) scrollSpeed else 0f
     val animatedSpeed by animateFloatAsState(
@@ -464,6 +493,32 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         if (pages.isNotEmpty()) {
             positionStore.savePosition(uri, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
         }
+    }
+
+    fun toggleBookmark() {
+        val page = currentPageIndex
+        val updated = if (annotations.bookmarks.any { it.pageIndex == page }) {
+            annotations.copy(bookmarks = annotations.bookmarks.filter { it.pageIndex != page })
+        } else {
+            annotations.copy(bookmarks = annotations.bookmarks + Bookmark(page, currentTimeMillis()))
+        }
+        annotations = updated
+        annotationStore.saveAnnotations(uri, updated)
+    }
+
+    fun findWordAtPosition(words: List<PositionedWord>, normX: Float, normY: Float): Int {
+        var bestIdx = -1
+        var bestDist = Float.MAX_VALUE
+        words.forEachIndexed { idx, word ->
+            val cx = word.rect.x + word.rect.width / 2
+            val cy = word.rect.y + word.rect.height / 2
+            val dist = (normX - cx) * (normX - cx) + (normY - cy) * (normY - cy)
+            if (dist < bestDist) {
+                bestDist = dist
+                bestIdx = idx
+            }
+        }
+        return if (bestDist < 0.04f) bestIdx else -1
     }
 
     // Load PDF progressively — pages appear as they're rendered
@@ -621,15 +676,68 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) {
+                    .pointerInput(selectionMode) {
                         detectTapGestures(
                             onTap = {
-                                isScrolling = !isScrolling
-                                showToggleIcon = true
+                                if (selectionMode) {
+                                    selectionMode = false
+                                    selectionPageIndex = -1
+                                    selectionStartIdx = -1
+                                    selectionEndIdx = -1
+                                } else {
+                                    isScrolling = !isScrolling
+                                    showToggleIcon = true
+                                }
                             },
                             onDoubleTap = {
-                                areControlsVisible = !areControlsVisible
-                                if (areControlsVisible && isScrolling) startHideTimer()
+                                if (!selectionMode) {
+                                    areControlsVisible = !areControlsVisible
+                                    if (areControlsVisible && isScrolling) startHideTimer()
+                                }
+                            },
+                            onLongPress = { offset ->
+                                if (!selectionMode) {
+                                    val layoutInfo = listState.layoutInfo
+                                    var targetPage = -1
+                                    var localY = 0f
+
+                                    for (item in layoutInfo.visibleItemsInfo) {
+                                        val itemTop = item.offset.toFloat()
+                                        val itemBottom = (item.offset + item.size).toFloat()
+                                        if (offset.y >= itemTop && offset.y < itemBottom) {
+                                            targetPage = item.index
+                                            localY = offset.y - itemTop
+                                            break
+                                        }
+                                    }
+
+                                    if (targetPage >= 0 && targetPage < pages.size) {
+                                        val pageItem = layoutInfo.visibleItemsInfo.find { it.index == targetPage }
+                                        if (pageItem != null) {
+                                            val viewportWidth = layoutInfo.viewportSize.width.toFloat()
+                                            val normX = offset.x / viewportWidth
+                                            val normY = localY / pageItem.size.toFloat()
+
+                                            coroutineScope.launch {
+                                                val words = cachedWords[targetPage]
+                                                    ?: textExtractor.extractWords(uri, targetPage).also {
+                                                        cachedWords = cachedWords + (targetPage to it)
+                                                    }
+
+                                                if (words.isNotEmpty()) {
+                                                    val wordIdx = findWordAtPosition(words, normX, normY)
+                                                    if (wordIdx >= 0) {
+                                                        isScrolling = false
+                                                        selectionMode = true
+                                                        selectionPageIndex = targetPage
+                                                        selectionStartIdx = wordIdx
+                                                        selectionEndIdx = wordIdx
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         )
                     }
@@ -640,13 +748,128 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                     contentPadding = PaddingValues(bottom = 140.dp, top = 60.dp)
                 ) {
                     val pageList = pages
-                    itemsIndexed(pageList) { _, pageBitmap ->
-                        Image(
-                            contentScale = ContentScale.Crop,
-                            bitmap = pageBitmap,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        )
+                    itemsIndexed(pageList) { index, pageBitmap ->
+                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Image(
+                                contentScale = ContentScale.Crop,
+                                bitmap = pageBitmap,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            // Saved highlight overlays
+                            val pageHighlights = annotations.highlights.filter { it.pageIndex == index }
+                            if (pageHighlights.isNotEmpty()) {
+                                Canvas(modifier = Modifier.matchParentSize()) {
+                                    for (highlight in pageHighlights) {
+                                        for (rect in highlight.rects) {
+                                            drawRect(
+                                                color = NeonCyan.copy(alpha = 0.2f),
+                                                topLeft = Offset(rect.x * size.width, rect.y * size.height),
+                                                size = Size(rect.width * size.width, rect.height * size.height)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            // Selection overlay
+                            if (selectionMode && selectionPageIndex == index && selectionStartIdx >= 0) {
+                                val words = cachedWords[index] ?: emptyList()
+                                if (words.isNotEmpty()) {
+                                    val startIdx = minOf(selectionStartIdx, selectionEndIdx).coerceAtLeast(0)
+                                    val endIdx = maxOf(selectionStartIdx, selectionEndIdx).coerceAtMost(words.size - 1)
+                                    val selectedWords = words.subList(startIdx, endIdx + 1)
+                                    Canvas(modifier = Modifier.matchParentSize()) {
+                                        for (word in selectedWords) {
+                                            drawRect(
+                                                color = NeonCyan.copy(alpha = 0.25f),
+                                                topLeft = Offset(word.rect.x * size.width, word.rect.y * size.height),
+                                                size = Size(word.rect.width * size.width, word.rect.height * size.height)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            // Bookmark indicator
+                            if (annotations.bookmarks.any { it.pageIndex == index }) {
+                                Icon(
+                                    Icons.Default.Bookmark,
+                                    contentDescription = null,
+                                    tint = NeonCyan,
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp)
+                                        .size(24.dp)
+                                )
+                            }
+                            // Highlight indicator (left accent bar)
+                            if (pageHighlights.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.CenterStart)
+                                        .width(3.dp)
+                                        .fillMaxHeight()
+                                        .background(
+                                            Brush.verticalGradient(listOf(NeonCyan, NeonPurple)),
+                                            RoundedCornerShape(2.dp)
+                                        )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Selection floating toolbar
+            if (selectionMode && selectionPageIndex >= 0) {
+                val words = cachedWords[selectionPageIndex] ?: emptyList()
+                if (words.isNotEmpty()) {
+                    val startIdx = minOf(selectionStartIdx, selectionEndIdx).coerceAtLeast(0)
+                    val endIdx = maxOf(selectionStartIdx, selectionEndIdx).coerceAtMost(words.size - 1)
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 80.dp)
+                            .statusBarsPadding()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .background(DarkSurface.copy(alpha = 0.95f), RoundedCornerShape(12.dp))
+                                .border(1.dp, NeonCyan.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = {
+                                if (startIdx >= 0 && endIdx < words.size) {
+                                    val selectedText = words.subList(startIdx, endIdx + 1).joinToString(" ") { it.text }
+                                    val rects = words.subList(startIdx, endIdx + 1).map { it.rect }
+                                    val highlight = Highlight(
+                                        pageIndex = selectionPageIndex,
+                                        text = selectedText,
+                                        rects = rects,
+                                        createdAt = currentTimeMillis()
+                                    )
+                                    val updated = annotations.copy(highlights = annotations.highlights + highlight)
+                                    annotations = updated
+                                    annotationStore.saveAnnotations(uri, updated)
+                                }
+                                selectionMode = false
+                                selectionStartIdx = -1
+                                selectionEndIdx = -1
+                            }) {
+                                Icon(Icons.Default.Highlight, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("HIGHLIGHT", color = NeonCyan, style = MaterialTheme.typography.labelMedium)
+                            }
+                            Box(Modifier.width(1.dp).height(24.dp).background(TextDim))
+                            TextButton(onClick = {
+                                selectionMode = false
+                                selectionStartIdx = -1
+                                selectionEndIdx = -1
+                            }) {
+                                Text("CANCEL", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                     }
                 }
             }
@@ -730,6 +953,31 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
             }
         }
 
+        // Annotations panel button
+        val annotationCount = annotations.bookmarks.size + annotations.highlights.size
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .statusBarsPadding()
+                .background(DarkSurface.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                .border(1.dp, NeonCyan.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                .clickable { showAnnotationsPanel = true }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CollectionsBookmark, contentDescription = "Annotations", tint = NeonCyan, modifier = Modifier.size(20.dp))
+                if (annotationCount > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "$annotationCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NeonCyan
+                    )
+                }
+            }
+        }
+
         // Auto-hiding control bar
         if (!isLoading && errorMessage == null) {
             AnimatedVisibility(
@@ -772,6 +1020,26 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                                     imageVector = if (isScrolling) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = if (isScrolling) "Pause" else "Play",
                                     tint = if (isScrolling) NeonCyan else TextSecondary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            // Bookmark button
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .border(
+                                        1.5.dp,
+                                        if (isCurrentPageBookmarked) NeonCyan else TextDim,
+                                        CircleShape
+                                    )
+                                    .clickable { toggleBookmark() },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                    contentDescription = if (isCurrentPageBookmarked) "Remove bookmark" else "Add bookmark",
+                                    tint = if (isCurrentPageBookmarked) NeonCyan else TextSecondary,
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
@@ -859,6 +1127,143 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
                             }
                         }
                 )
+            }
+        }
+
+        // Annotations panel bottom sheet
+        if (showAnnotationsPanel) {
+            @OptIn(ExperimentalMaterial3Api::class)
+            ModalBottomSheet(
+                onDismissRequest = { showAnnotationsPanel = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = DarkSurface,
+                contentColor = TextPrimary,
+                dragHandle = {
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(CyanPurpleGradient))
+                }
+            ) {
+                var activeTab by remember { mutableIntStateOf(0) }
+
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("ANNOTATIONS", style = MaterialTheme.typography.titleMedium, color = NeonCyan)
+                        IconButton(onClick = { showAnnotationsPanel = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Tabs
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("BOOKMARKS" to annotations.bookmarks.size, "HIGHLIGHTS" to annotations.highlights.size).forEachIndexed { idx, (label, count) ->
+                            val isActive = activeTab == idx
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(
+                                        if (isActive) NeonCyan.copy(alpha = 0.15f) else SurfaceHighlight,
+                                        RoundedCornerShape(20.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isActive) NeonCyan.copy(alpha = 0.5f) else Color.Transparent,
+                                        RoundedCornerShape(20.dp)
+                                    )
+                                    .clickable { activeTab = idx }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("$label ($count)", style = MaterialTheme.typography.labelMedium, color = if (isActive) NeonCyan else TextSecondary)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // Content
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                        if (activeTab == 0) {
+                            val sortedBookmarks = annotations.bookmarks.sortedBy { it.pageIndex }
+                            if (sortedBookmarks.isEmpty()) {
+                                item {
+                                    Text("No bookmarks yet", style = MaterialTheme.typography.bodyMedium, color = TextDim,
+                                        modifier = Modifier.padding(vertical = 24.dp).fillMaxWidth(), textAlign = TextAlign.Center)
+                                }
+                            } else {
+                                items(sortedBookmarks.size) { idx ->
+                                    val bookmark = sortedBookmarks[idx]
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth()
+                                            .clickable {
+                                                coroutineScope.launch { listState.scrollToItem(bookmark.pageIndex) }
+                                                isScrolling = false
+                                                showAnnotationsPanel = false
+                                            }
+                                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Bookmark, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Text("Page ${bookmark.pageIndex + 1}", style = MaterialTheme.typography.bodyLarge, color = TextPrimary, modifier = Modifier.weight(1f))
+                                        IconButton(onClick = {
+                                            val updated = annotations.copy(bookmarks = annotations.bookmarks.filter { it.pageIndex != bookmark.pageIndex })
+                                            annotations = updated
+                                            annotationStore.saveAnnotations(uri, updated)
+                                        }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextDim, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            val sortedHighlights = annotations.highlights.sortedBy { it.pageIndex }
+                            if (sortedHighlights.isEmpty()) {
+                                item {
+                                    Text("No highlights yet", style = MaterialTheme.typography.bodyMedium, color = TextDim,
+                                        modifier = Modifier.padding(vertical = 24.dp).fillMaxWidth(), textAlign = TextAlign.Center)
+                                }
+                            } else {
+                                items(sortedHighlights.size) { idx ->
+                                    val highlight = sortedHighlights[idx]
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth()
+                                            .clickable {
+                                                coroutineScope.launch { listState.scrollToItem(highlight.pageIndex) }
+                                                isScrolling = false
+                                                showAnnotationsPanel = false
+                                            }
+                                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Highlight, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Page ${highlight.pageIndex + 1}", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                            Text(
+                                                highlight.text.take(60) + if (highlight.text.length > 60) "..." else "",
+                                                style = MaterialTheme.typography.bodyMedium, color = TextPrimary, maxLines = 2
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            val updated = annotations.copy(highlights = annotations.highlights.filter { it !== highlight })
+                                            annotations = updated
+                                            annotationStore.saveAnnotations(uri, updated)
+                                        }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextDim, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                }
             }
         }
     }
