@@ -1,49 +1,115 @@
 package com.vantechinformatics.autoscrollingreader
 
-import android.Manifest
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
-import android.provider.Settings
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.tom_roush.pdfbox.text.TextPosition
 import java.io.File
 import java.io.FileOutputStream
-import androidx.core.net.toUri
-
-import android.widget.Toast
-
-class AndroidFileImporter : FileImporter {
-    override val isManualImportSupported: Boolean = false
-    override fun pickFile(onResult: (Boolean) -> Unit) {
-        onResult(false)
-    }
-}
-
-actual fun getFileImporter(): FileImporter = AndroidFileImporter()
 
 // Context global
 lateinit var appContext: Context
+
+// --- SAVED URI STORE ---
+// Stores user-picked PDF URIs so they persist across app restarts
+
+class SavedUriStore(private val context: Context) {
+    private val prefs = context.getSharedPreferences("saved_pdfs", Context.MODE_PRIVATE)
+
+    fun save(uri: String, name: String) {
+        val saved = getAll().toMutableMap()
+        saved[uri] = name
+        prefs.edit().putStringSet("uris", saved.keys.toSet()).apply()
+        prefs.edit().putString("name_$uri", name).apply()
+    }
+
+    fun getAll(): Map<String, String> {
+        val uris = prefs.getStringSet("uris", emptySet()) ?: emptySet()
+        return uris.associateWith { uri -> prefs.getString("name_$uri", "PDF Document") ?: "PDF Document" }
+    }
+}
+
+// --- FILE IMPORTER (SAF-based) ---
+
+class AndroidFileImporter(private val context: Context) : FileImporter {
+    override val isManualImportSupported: Boolean = true
+
+    // Shared state to trigger the SAF launcher from Compose
+    var launchPicker: (() -> Unit)? = null
+    var pendingCallback: ((Boolean) -> Unit)? = null
+
+    override fun pickFile(onResult: (Boolean) -> Unit) {
+        pendingCallback = onResult
+        launchPicker?.invoke()
+    }
+
+    fun handleResult(uri: Uri?) {
+        if (uri != null) {
+            // Take persistable permission so we can access this file later
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+                // Some providers don't support persistable permissions
+            }
+
+            // Get display name
+            val name = getFileName(uri)
+
+            // Save to our store
+            val store = SavedUriStore(context)
+            store.save(uri.toString(), name)
+
+            pendingCallback?.invoke(true)
+        } else {
+            pendingCallback?.invoke(false)
+        }
+        pendingCallback = null
+    }
+
+    private fun getFileName(uri: Uri): String {
+        var name = "PDF Document"
+        try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) name = cursor.getString(idx) ?: name
+                }
+            }
+        } catch (_: Exception) {}
+        return name
+    }
+}
+
+private var _fileImporter: AndroidFileImporter? = null
+
+actual fun getFileImporter(): FileImporter {
+    if (_fileImporter == null) {
+        _fileImporter = AndroidFileImporter(appContext)
+    }
+    return _fileImporter!!
+}
 
 // --- PLATFORM ---
 class AndroidPlatform : Platform {
@@ -52,122 +118,78 @@ class AndroidPlatform : Platform {
 
 actual fun getPlatform(): Platform = AndroidPlatform()
 
-// --- PERMISSIONS ---
+// --- PERMISSIONS (no longer needed — SAF handles everything) ---
 
-actual fun checkStoragePermission(): Boolean {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        Environment.isExternalStorageManager()
-    } else {
-        ContextCompat.checkSelfPermission(
-            appContext,
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-}
+actual fun checkStoragePermission(): Boolean = true
 
 @Composable
 actual fun PermissionWrapper(
     content: @Composable () -> Unit
 ) {
-    val context = LocalContext.current
-    var hasPermission by remember { mutableStateOf(checkStoragePermission()) }
+    // Set up the SAF launcher here (Composable context required)
+    val importer = remember { _fileImporter ?: AndroidFileImporter(appContext).also { _fileImporter = it } }
 
-    // Launcher pentru Android 11+ (Settings Intent)
-    val android11Launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) {
-        // La întoarcerea din setări, verificăm din nou
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            hasPermission = Environment.isExternalStorageManager()
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        importer.handleResult(uri)
+    }
+
+    // Connect the launcher to the importer
+    LaunchedEffect(Unit) {
+        importer.launchPicker = {
+            launcher.launch(arrayOf("application/pdf"))
         }
     }
 
-    // Launcher pentru Android 10 și mai vechi (Standard Permission)
-    val legacyLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            hasPermission = isGranted
-        }
-    )
-
-    if (hasPermission) {
-        content()
-    } else {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(24.dp)
-            ) {
-                Text(
-                    "Acces Total Necesar",
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    "Pentru a scana memoria internă și Cardul SD, aplicația are nevoie de permisiunea 'All Files Access'.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Button(onClick = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        try {
-                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                            intent.addCategory("android.intent.category.DEFAULT")
-                            intent.data = String.format("package:%s", context.packageName).toUri()
-                            android11Launcher.launch(intent)
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                            android11Launcher.launch(intent)
-                        }
-                    } else {
-                        legacyLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-                    }
-                }) {
-                    Text("Acordă Acces Fișiere")
-                }
-            }
-        }
-    }
+    content()
 }
 
-// --- SCANNER (Internal + External SD) ---
+// --- SCANNER (MediaStore + Saved URIs) ---
 
 class AndroidPdfScanner(private val context: Context) : PdfScanner {
     override suspend fun getAllPdfs(): List<PdfDocument> = withContext(Dispatchers.IO) {
         val pdfList = mutableListOf<PdfDocument>()
+        val seenUris = mutableSetOf<String>()
 
-        // Determinăm ce volume scanăm (Internal + External SD Card)
-        val volumes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.getExternalVolumeNames(context)
-        } else {
-            setOf("external")
+        // 1. Load user-picked URIs from saved store (these always work)
+        val savedStore = SavedUriStore(context)
+        for ((uri, name) in savedStore.getAll()) {
+            // Verify the URI is still accessible
+            try {
+                context.contentResolver.openInputStream(Uri.parse(uri))?.close()
+                pdfList.add(PdfDocument(name, uri))
+                seenUris.add(uri)
+            } catch (_: Exception) {
+                // URI no longer accessible, skip it
+            }
         }
 
-        for (volumeName in volumes) {
-            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Files.getContentUri(volumeName)
+        // 2. Query MediaStore for PDFs (may return results without permissions on some devices)
+        try {
+            val volumes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.getExternalVolumeNames(context)
             } else {
-                MediaStore.Files.getContentUri("external")
+                setOf("external")
             }
 
-            val projection = arrayOf(
-                MediaStore.Files.FileColumns._ID,
-                MediaStore.Files.FileColumns.DISPLAY_NAME,
-                MediaStore.Files.FileColumns.MIME_TYPE,
-                MediaStore.Files.FileColumns.SIZE // Opțional, bun pentru filtrare fișiere corupte (0kb)
-            )
+            for (volumeName in volumes) {
+                val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaStore.Files.getContentUri(volumeName)
+                } else {
+                    MediaStore.Files.getContentUri("external")
+                }
 
-            // Căutăm PDF-uri
-            val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ?"
-            val selectionArgs = arrayOf("application/pdf")
-            val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+                val projection = arrayOf(
+                    MediaStore.Files.FileColumns._ID,
+                    MediaStore.Files.FileColumns.DISPLAY_NAME,
+                    MediaStore.Files.FileColumns.MIME_TYPE
+                )
 
-            try {
+                val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ?"
+                val selectionArgs = arrayOf("application/pdf")
+                val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+
                 context.contentResolver.query(
                     collection, projection, selection, selectionArgs, sortOrder
                 )?.use { cursor ->
@@ -177,17 +199,17 @@ class AndroidPdfScanner(private val context: Context) : PdfScanner {
                     while (cursor.moveToNext()) {
                         val id = cursor.getLong(idColumn)
                         val name = cursor.getString(nameColumn) ?: "Unknown"
+                        val contentUri = ContentUris.withAppendedId(collection, id).toString()
 
-                        // Creăm URI-ul complet
-                        val contentUri = ContentUris.withAppendedId(collection, id)
-
-                        pdfList.add(PdfDocument(name, contentUri.toString()))
+                        if (contentUri !in seenUris) {
+                            pdfList.add(PdfDocument(name, contentUri))
+                            seenUris.add(contentUri)
+                        }
                     }
                 }
-            } catch (e: Exception) {
-                // Unele volume (ex: de sistem) pot arunca erori, le ignorăm și continuăm
-                e.printStackTrace()
             }
+        } catch (_: Exception) {
+            // MediaStore query may fail without permissions — that's fine, we still have saved URIs
         }
 
         return@withContext pdfList
@@ -300,3 +322,134 @@ class AndroidReadingPositionStore(private val context: Context) : ReadingPositio
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = AndroidReadingPositionStore(appContext)
+
+// --- ANNOTATION STORE ---
+
+class AndroidAnnotationStore(private val context: Context) : AnnotationStore {
+    private val prefs = context.getSharedPreferences("pdf_annotations", Context.MODE_PRIVATE)
+
+    override fun saveAnnotations(uri: String, annotations: PdfAnnotations) {
+        val json = Json.encodeToString(annotations)
+        prefs.edit().putString("annot_$uri", json).apply()
+    }
+
+    override fun getAnnotations(uri: String): PdfAnnotations {
+        val json = prefs.getString("annot_$uri", null) ?: return PdfAnnotations()
+        return try {
+            Json.decodeFromString(json)
+        } catch (e: Exception) {
+            PdfAnnotations()
+        }
+    }
+}
+
+actual fun getAnnotationStore(): AnnotationStore = AndroidAnnotationStore(appContext)
+
+// --- PDF TEXT EXTRACTOR ---
+
+class AndroidPdfTextExtractor(private val context: Context) : PdfTextExtractor {
+    private var initialized = false
+
+    private fun ensureInitialized() {
+        if (!initialized) {
+            PDFBoxResourceLoader.init(context)
+            initialized = true
+        }
+    }
+
+    override suspend fun extractWords(data: Any, pageIndex: Int): List<PositionedWord> = withContext(Dispatchers.IO) {
+        ensureInitialized()
+        val words = mutableListOf<PositionedWord>()
+        val inputString = data.toString()
+
+        val inputStream = if (inputString.startsWith("content://") || inputString.startsWith("file://")) {
+            context.contentResolver.openInputStream(Uri.parse(inputString))
+                ?: return@withContext emptyList()
+        } else {
+            context.assets.open(inputString)
+        }
+
+        val document = PDDocument.load(inputStream)
+        try {
+            val page = document.getPage(pageIndex)
+            val pageWidth = page.mediaBox.width
+            val pageHeight = page.mediaBox.height
+
+            val stripper = object : PDFTextStripper() {
+                private val currentWord = StringBuilder()
+                private var wordMinX = Float.MAX_VALUE
+                private var wordMinY = Float.MAX_VALUE
+                private var wordMaxX = 0f
+                private var wordMaxY = 0f
+
+                init {
+                    startPage = pageIndex + 1
+                    endPage = pageIndex + 1
+                    sortByPosition = true
+                }
+
+                override fun writeString(text: String, textPositions: MutableList<TextPosition>) {
+                    for (tp in textPositions) {
+                        val char = tp.unicode
+                        if (char.isBlank()) {
+                            flushWord(pageWidth, pageHeight)
+                        } else {
+                            if (currentWord.isEmpty()) {
+                                wordMinX = tp.xDirAdj
+                                wordMinY = tp.yDirAdj - tp.heightDir
+                                wordMaxX = tp.xDirAdj + tp.widthDirAdj
+                                wordMaxY = tp.yDirAdj
+                            } else {
+                                wordMinX = minOf(wordMinX, tp.xDirAdj)
+                                wordMinY = minOf(wordMinY, tp.yDirAdj - tp.heightDir)
+                                wordMaxX = maxOf(wordMaxX, tp.xDirAdj + tp.widthDirAdj)
+                                wordMaxY = maxOf(wordMaxY, tp.yDirAdj)
+                            }
+                            currentWord.append(char)
+                        }
+                    }
+                }
+
+                override fun writeLineSeparator() {
+                    flushWord(pageWidth, pageHeight)
+                }
+
+                fun finish() {
+                    flushWord(pageWidth, pageHeight)
+                }
+
+                private fun flushWord(pw: Float, ph: Float) {
+                    if (currentWord.isNotEmpty()) {
+                        words.add(PositionedWord(
+                            text = currentWord.toString(),
+                            rect = TextRect(
+                                x = wordMinX / pw,
+                                y = wordMinY / ph,
+                                width = (wordMaxX - wordMinX) / pw,
+                                height = (wordMaxY - wordMinY) / ph
+                            )
+                        ))
+                        currentWord.clear()
+                        wordMinX = Float.MAX_VALUE
+                        wordMinY = Float.MAX_VALUE
+                        wordMaxX = 0f
+                        wordMaxY = 0f
+                    }
+                }
+            }
+
+            stripper.getText(document)
+            stripper.finish()
+        } finally {
+            document.close()
+        }
+
+        words
+    }
+}
+
+actual fun getPdfTextExtractor(): PdfTextExtractor = AndroidPdfTextExtractor(appContext)
+
+// --- CURRENT TIME ---
+
+actual fun currentTimeMillis(): Long = System.currentTimeMillis()

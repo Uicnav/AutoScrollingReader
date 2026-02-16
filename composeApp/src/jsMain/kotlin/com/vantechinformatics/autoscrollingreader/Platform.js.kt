@@ -28,3 +28,25 @@ class JsReadingPositionStore : ReadingPositionStore {
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = JsReadingPositionStore()
+
+// --- ANNOTATION STORE ---
+
+class JsAnnotationStore : AnnotationStore {
+    private val store = mutableMapOf<String, PdfAnnotations>()
+    override fun saveAnnotations(uri: String, annotations: PdfAnnotations) { store[uri] = annotations }
+    override fun getAnnotations(uri: String): PdfAnnotations = store[uri] ?: PdfAnnotations()
+}
+
+actual fun getAnnotationStore(): AnnotationStore = JsAnnotationStore()
+
+// --- PDF TEXT EXTRACTOR ---
+
+class JsPdfTextExtractor : PdfTextExtractor {
+    override suspend fun extractWords(data: Any, pageIndex: Int): List<PositionedWord> = emptyList()
+}
+
+actual fun getPdfTextExtractor(): PdfTextExtractor = JsPdfTextExtractor()
+
+// --- CURRENT TIME ---
+
+actual fun currentTimeMillis(): Long = kotlin.js.Date.now().toLong()

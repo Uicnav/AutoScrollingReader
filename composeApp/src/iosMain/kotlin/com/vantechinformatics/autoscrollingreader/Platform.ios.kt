@@ -55,6 +55,8 @@ import platform.UIKit.UIImage
 import platform.UIKit.UIImagePNGRepresentation
 import platform.UniformTypeIdentifiers.UTTypePDF
 import platform.darwin.NSObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 
 // 1. Clasa principală: Implementează DOAR interfața Kotlin
 class IosFileImporter : FileImporter {
@@ -399,3 +401,41 @@ class IOSReadingPositionStore : ReadingPositionStore {
 }
 
 actual fun getReadingPositionStore(): ReadingPositionStore = IOSReadingPositionStore()
+
+// --- ANNOTATION STORE ---
+
+class IOSAnnotationStore : AnnotationStore {
+    private val defaults = platform.Foundation.NSUserDefaults.standardUserDefaults
+
+    override fun saveAnnotations(uri: String, annotations: PdfAnnotations) {
+        val json = Json.encodeToString(annotations)
+        defaults.setObject(json, forKey = "annot_$uri")
+    }
+
+    override fun getAnnotations(uri: String): PdfAnnotations {
+        val json = defaults.stringForKey("annot_$uri") ?: return PdfAnnotations()
+        return try {
+            Json.decodeFromString(json)
+        } catch (e: Exception) {
+            PdfAnnotations()
+        }
+    }
+}
+
+actual fun getAnnotationStore(): AnnotationStore = IOSAnnotationStore()
+
+// --- PDF TEXT EXTRACTOR ---
+
+class IOSPdfTextExtractor : PdfTextExtractor {
+    override suspend fun extractWords(data: Any, pageIndex: Int): List<PositionedWord> {
+        // TODO: Implement with PDFKit PDFPage.selectionForWord(at:) when available
+        return emptyList()
+    }
+}
+
+actual fun getPdfTextExtractor(): PdfTextExtractor = IOSPdfTextExtractor()
+
+// --- CURRENT TIME ---
+
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+actual fun currentTimeMillis(): Long = (platform.posix.time(null) * 1000)
