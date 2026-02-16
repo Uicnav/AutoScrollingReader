@@ -3,6 +3,7 @@ package com.vantechinformatics.autoscrollingreader
 import androidx.compose.ui.graphics.ImageBitmap
 
 import androidx.compose.runtime.Composable
+import kotlinx.serialization.Serializable
 interface FileImporter {
     val isManualImportSupported: Boolean
     fun pickFile(onResult: (Boolean) -> Unit)
@@ -53,3 +54,55 @@ interface ReadingPositionStore {
 }
 
 expect fun getReadingPositionStore(): ReadingPositionStore
+
+// --- ANNOTATIONS ---
+
+@Serializable
+data class TextRect(
+    val x: Float, val y: Float,
+    val width: Float, val height: Float
+)
+
+@Serializable
+data class Bookmark(
+    val pageIndex: Int,
+    val createdAt: Long
+)
+
+@Serializable
+data class Highlight(
+    val pageIndex: Int,
+    val text: String,
+    val rects: List<TextRect>,
+    val createdAt: Long
+)
+
+@Serializable
+data class PdfAnnotations(
+    val bookmarks: List<Bookmark> = emptyList(),
+    val highlights: List<Highlight> = emptyList()
+)
+
+interface AnnotationStore {
+    fun saveAnnotations(uri: String, annotations: PdfAnnotations)
+    fun getAnnotations(uri: String): PdfAnnotations
+}
+
+expect fun getAnnotationStore(): AnnotationStore
+
+// --- TEXT EXTRACTION ---
+
+data class PositionedWord(
+    val text: String,
+    val rect: TextRect
+)
+
+interface PdfTextExtractor {
+    suspend fun extractWords(data: Any, pageIndex: Int): List<PositionedWord>
+}
+
+expect fun getPdfTextExtractor(): PdfTextExtractor
+
+// --- CROSS-PLATFORM TIME ---
+
+expect fun currentTimeMillis(): Long
