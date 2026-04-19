@@ -85,8 +85,8 @@ android {
         applicationId = "com.vantechinformatics.autoscrollingreader"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 210
-        versionName = "2.1.0"
+        versionCode = 220
+        versionName = "2.2.0"
     }
     packaging {
         resources {
