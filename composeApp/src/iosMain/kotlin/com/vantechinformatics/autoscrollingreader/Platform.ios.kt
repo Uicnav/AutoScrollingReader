@@ -439,3 +439,49 @@ actual fun getPdfTextExtractor(): PdfTextExtractor = IOSPdfTextExtractor()
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 actual fun currentTimeMillis(): Long = (platform.posix.time(null) * 1000)
+
+// --- IN-APP REVIEW ---
+
+class IOSReviewStateStore : ReviewStateStore {
+    private val defaults = platform.Foundation.NSUserDefaults.standardUserDefaults
+
+    override fun getSessionCount(): Int =
+        defaults.integerForKey("review_session_count").toInt()
+
+    override fun setSessionCount(value: Int) {
+        defaults.setInteger(value.toLong(), forKey = "review_session_count")
+    }
+
+    override fun getDistinctDays(): List<Long> {
+        val csv = defaults.stringForKey("review_distinct_days") ?: return emptyList()
+        if (csv.isEmpty()) return emptyList()
+        return csv.split(",").mapNotNull { it.toLongOrNull() }
+    }
+
+    override fun setDistinctDays(days: List<Long>) {
+        defaults.setObject(days.joinToString(","), forKey = "review_distinct_days")
+    }
+
+    override fun getLastPromptMs(): Long =
+        defaults.doubleForKey("review_last_prompt_ms").toLong()
+
+    override fun setLastPromptMs(value: Long) {
+        defaults.setDouble(value.toDouble(), forKey = "review_last_prompt_ms")
+    }
+}
+
+actual fun getReviewStateStore(): ReviewStateStore = IOSReviewStateStore()
+
+class IOSReviewPromptManager : ReviewPromptManager {
+    override suspend fun requestReviewIfAppropriate() {
+        val tracker = ReviewEligibilityTracker(IOSReviewStateStore())
+        if (!tracker.isEligible()) return
+        val scene = platform.UIKit.UIApplication.sharedApplication.keyWindow?.windowScene
+        if (scene != null) {
+            platform.StoreKit.SKStoreReviewController.requestReviewInScene(scene)
+        }
+        tracker.markPromptRequested()
+    }
+}
+
+actual fun getReviewPromptManager(): ReviewPromptManager = IOSReviewPromptManager()

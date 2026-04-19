@@ -10,9 +10,13 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import com.google.android.play.core.ktx.launchReview
+import com.google.android.play.core.ktx.requestReview
+import com.google.android.play.core.review.ReviewManagerFactory
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
@@ -453,3 +457,48 @@ actual fun getPdfTextExtractor(): PdfTextExtractor = AndroidPdfTextExtractor(app
 // --- CURRENT TIME ---
 
 actual fun currentTimeMillis(): Long = System.currentTimeMillis()
+
+// --- IN-APP REVIEW ---
+
+var currentActivity: ComponentActivity? = null
+
+class AndroidReviewStateStore(private val context: Context) : ReviewStateStore {
+    private val prefs = context.getSharedPreferences("review_state", Context.MODE_PRIVATE)
+
+    override fun getSessionCount(): Int = prefs.getInt("session_count", 0)
+    override fun setSessionCount(value: Int) { prefs.edit().putInt("session_count", value).apply() }
+
+    override fun getDistinctDays(): List<Long> {
+        val csv = prefs.getString("distinct_days", "") ?: ""
+        if (csv.isEmpty()) return emptyList()
+        return csv.split(",").mapNotNull { it.toLongOrNull() }
+    }
+
+    override fun setDistinctDays(days: List<Long>) {
+        prefs.edit().putString("distinct_days", days.joinToString(",")).apply()
+    }
+
+    override fun getLastPromptMs(): Long = prefs.getLong("last_prompt_ms", 0L)
+    override fun setLastPromptMs(value: Long) { prefs.edit().putLong("last_prompt_ms", value).apply() }
+}
+
+actual fun getReviewStateStore(): ReviewStateStore = AndroidReviewStateStore(appContext)
+
+class AndroidReviewPromptManager(private val context: Context) : ReviewPromptManager {
+    override suspend fun requestReviewIfAppropriate() {
+        val tracker = ReviewEligibilityTracker(AndroidReviewStateStore(context))
+        if (!tracker.isEligible()) return
+        val activity = currentActivity ?: return
+        try {
+            val reviewManager = ReviewManagerFactory.create(activity)
+            val reviewInfo = reviewManager.requestReview()
+            reviewManager.launchReview(activity, reviewInfo)
+        } catch (_: Exception) {
+            // Play Services missing / Play Core unavailable — skip silently.
+        } finally {
+            tracker.markPromptRequested()
+        }
+    }
+}
+
+actual fun getReviewPromptManager(): ReviewPromptManager = AndroidReviewPromptManager(appContext)

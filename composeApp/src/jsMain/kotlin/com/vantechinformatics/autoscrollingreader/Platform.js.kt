@@ -50,3 +50,22 @@ actual fun getPdfTextExtractor(): PdfTextExtractor = JsPdfTextExtractor()
 // --- CURRENT TIME ---
 
 actual fun currentTimeMillis(): Long = kotlin.js.Date.now().toLong()
+
+// --- IN-APP REVIEW (no-op on web) ---
+
+class JsReviewStateStore : ReviewStateStore {
+    override fun getSessionCount(): Int = 0
+    override fun setSessionCount(value: Int) {}
+    override fun getDistinctDays(): List<Long> = emptyList()
+    override fun setDistinctDays(days: List<Long>) {}
+    override fun getLastPromptMs(): Long = 0L
+    override fun setLastPromptMs(value: Long) {}
+}
+
+actual fun getReviewStateStore(): ReviewStateStore = JsReviewStateStore()
+
+class JsReviewPromptManager : ReviewPromptManager {
+    override suspend fun requestReviewIfAppropriate() {}
+}
+
+actual fun getReviewPromptManager(): ReviewPromptManager = JsReviewPromptManager()

@@ -61,6 +61,7 @@ kotlin {
             implementation(libs.androidx.appcompat)
             implementation(libs.androidx.core.ktx)
             implementation(libs.pdfbox.android)
+            implementation(libs.google.play.review)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -84,8 +85,8 @@ android {
         applicationId = "com.vantechinformatics.autoscrollingreader"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 210
+        versionName = "2.1.0"
     }
     packaging {
         resources {

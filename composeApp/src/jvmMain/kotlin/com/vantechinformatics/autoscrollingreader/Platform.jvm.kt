@@ -169,3 +169,44 @@ actual fun getPdfTextExtractor(): PdfTextExtractor = JvmPdfTextExtractor()
 // --- CURRENT TIME ---
 
 actual fun currentTimeMillis(): Long = System.currentTimeMillis()
+
+// --- IN-APP REVIEW (no-op on desktop) ---
+
+class JvmReviewStateStore : ReviewStateStore {
+    override fun getSessionCount(): Int = 0
+    override fun setSessionCount(value: Int) {}
+    override fun getDistinctDays(): List<Long> = emptyList()
+    override fun setDistinctDays(days: List<Long>) {}
+    override fun getLastPromptMs(): Long = 0L
+    override fun setLastPromptMs(value: Long) {}
+}
+
+actual fun getReviewStateStore(): ReviewStateStore = JvmReviewStateStore()
+
+class JvmReviewPromptManager : ReviewPromptManager {
+    override suspend fun requestReviewIfAppropriate() {}
+}
+
+actual fun getReviewPromptManager(): ReviewPromptManager = JvmReviewPromptManager()
+
+// --- NO-OP ACTUALS FOR JVM (feature not available on desktop) ---
+
+class JvmFileImporter : FileImporter {
+    override val isManualImportSupported: Boolean = false
+    override fun pickFile(onResult: (Boolean) -> Unit) { onResult(false) }
+}
+
+actual fun getFileImporter(): FileImporter = JvmFileImporter()
+
+actual fun checkStoragePermission(): Boolean = true
+
+@androidx.compose.runtime.Composable
+actual fun PermissionWrapper(content: @androidx.compose.runtime.Composable () -> Unit) {
+    content()
+}
+
+class JvmPdfScanner : PdfScanner {
+    override suspend fun getAllPdfs(): List<PdfDocument> = emptyList()
+}
+
+actual fun getPdfScanner(): PdfScanner = JvmPdfScanner()

@@ -106,3 +106,22 @@ expect fun getPdfTextExtractor(): PdfTextExtractor
 // --- CROSS-PLATFORM TIME ---
 
 expect fun currentTimeMillis(): Long
+
+// --- IN-APP REVIEW ---
+
+interface ReviewStateStore {
+    fun getSessionCount(): Int
+    fun setSessionCount(value: Int)
+    fun getDistinctDays(): List<Long>
+    fun setDistinctDays(days: List<Long>)
+    fun getLastPromptMs(): Long
+    fun setLastPromptMs(value: Long)
+}
+
+expect fun getReviewStateStore(): ReviewStateStore
+
+interface ReviewPromptManager {
+    suspend fun requestReviewIfAppropriate()
+}
+
+expect fun getReviewPromptManager(): ReviewPromptManager

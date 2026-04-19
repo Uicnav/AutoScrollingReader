@@ -19,6 +19,7 @@ materialIconsExtended = "1.7.3"
 kotlinx-serialization = "1.7.3"
 pdfbox = "3.0.6"
 pdfbox-android = "2.0.27.0"
+google-play-review = "2.0.2"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -43,6 +44,7 @@ material-icons-extended = { module = "org.jetbrains.compose.material:material-ic
 pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 pdfbox-android = { module = "com.tom-roush:pdfbox-android", version.ref = "pdfbox-android" }
+google-play-review = { module = "com.google.android.play:review-ktx", version.ref = "google-play-review" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

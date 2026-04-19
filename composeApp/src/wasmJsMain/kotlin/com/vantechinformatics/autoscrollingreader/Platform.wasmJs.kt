@@ -50,3 +50,22 @@ actual fun getPdfTextExtractor(): PdfTextExtractor = WasmPdfTextExtractor()
 // --- CURRENT TIME ---
 
 actual fun currentTimeMillis(): Long = kotlin.js.Date.now().toLong()
+
+// --- IN-APP REVIEW (no-op on web) ---
+
+class WasmReviewStateStore : ReviewStateStore {
+    override fun getSessionCount(): Int = 0
+    override fun setSessionCount(value: Int) {}
+    override fun getDistinctDays(): List<Long> = emptyList()
+    override fun setDistinctDays(days: List<Long>) {}
+    override fun getLastPromptMs(): Long = 0L
+    override fun setLastPromptMs(value: Long) {}
+}
+
+actual fun getReviewStateStore(): ReviewStateStore = WasmReviewStateStore()
+
+class WasmReviewPromptManager : ReviewPromptManager {
+    override suspend fun requestReviewIfAppropriate() {}
+}
+
+actual fun getReviewPromptManager(): ReviewPromptManager = WasmReviewPromptManager()

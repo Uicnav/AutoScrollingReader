@@ -283,10 +283,24 @@ fun App(externalData: Any? = null) {
 @Composable
 fun MainContent(externalData: Any?) {
     var currentFileUri by rememberSaveable { mutableStateOf(externalData as? String) }
+    val reviewPromptManager = remember { getReviewPromptManager() }
+    val coroutineScope = rememberCoroutineScope()
+    var wasReading by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(externalData) {
         if (externalData != null) {
             currentFileUri = externalData as String
+        }
+    }
+
+    LaunchedEffect(currentFileUri) {
+        if (currentFileUri != null) {
+            wasReading = true
+        } else if (wasReading) {
+            wasReading = false
+            coroutineScope.launch {
+                reviewPromptManager.requestReviewIfAppropriate()
+            }
         }
     }
 
@@ -449,6 +463,7 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
     var positionRestored by remember { mutableStateOf(false) }
     var autoScrollActive by remember { mutableStateOf(false) }
     var hideJob by remember { mutableStateOf<Job?>(null) }
+    val sessionStartMs = remember(uri) { currentTimeMillis() }
 
     // Annotation state
     val annotationStore = remember { getAnnotationStore() }
@@ -603,7 +618,13 @@ fun PdfReaderScreen(uri: String, onClose: () -> Unit) {
         }
     }
 
-    DisposableEffect(uri) { onDispose { saveCurrentPosition() } }
+    DisposableEffect(uri) {
+        onDispose {
+            saveCurrentPosition()
+            val endMs = currentTimeMillis()
+            ReviewEligibilityTracker(getReviewStateStore()).recordSession(sessionStartMs, endMs)
+        }
+    }
 
     LaunchedEffect(showToggleIcon) {
         if (showToggleIcon) { delay(800); showToggleIcon = false }
