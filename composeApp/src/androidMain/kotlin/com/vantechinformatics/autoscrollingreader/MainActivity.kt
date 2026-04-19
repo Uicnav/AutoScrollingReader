@@ -13,7 +13,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         appContext = applicationContext
-        currentActivity = this
 
         val externalUri: String? = if (intent?.action == Intent.ACTION_VIEW) {
             intent.data?.toString()
@@ -24,6 +23,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             App(externalData = externalUri)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        currentActivity = this
+    }
+
+    override fun onPause() {
+        if (currentActivity === this) {
+            currentActivity = null
+        }
+        super.onPause()
     }
 
     override fun onDestroy() {

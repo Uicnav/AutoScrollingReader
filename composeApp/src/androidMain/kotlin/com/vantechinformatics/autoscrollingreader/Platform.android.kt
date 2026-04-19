@@ -493,10 +493,10 @@ class AndroidReviewPromptManager(private val context: Context) : ReviewPromptMan
             val reviewManager = ReviewManagerFactory.create(activity)
             val reviewInfo = reviewManager.requestReview()
             reviewManager.launchReview(activity, reviewInfo)
-        } catch (_: Exception) {
-            // Play Services missing / Play Core unavailable — skip silently.
-        } finally {
             tracker.markPromptRequested()
+        } catch (_: Exception) {
+            // Play Services missing / Play Core unavailable — skip silently;
+            // do not stamp cooldown so the user gets a chance on a future session.
         }
     }
 }

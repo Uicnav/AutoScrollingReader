@@ -285,7 +285,7 @@ fun MainContent(externalData: Any?) {
     var currentFileUri by rememberSaveable { mutableStateOf(externalData as? String) }
     val reviewPromptManager = remember { getReviewPromptManager() }
     val coroutineScope = rememberCoroutineScope()
-    var wasReading by rememberSaveable { mutableStateOf(false) }
+    var wasReading by remember { mutableStateOf(false) }
 
     LaunchedEffect(externalData) {
         if (externalData != null) {
